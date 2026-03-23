@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Dev Certificates (Safety: never commit private keys or generated certs)
+*.pem
+*.crt
+*.key
+*.p12
+*.pfx
+
+# System
+.DS_Store
+Thumbs.db
