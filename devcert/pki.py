@@ -11,38 +11,37 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 class PKIService:
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
-            # Follow XDG standards for data storage
             data_home = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
             storage_path = data_home / "devcert"
             
         self.storage_path = Path(storage_path)
-        self.ca_path = self.storage_path / "rootCA.pem"
-        self.ca_key_path = self.storage_path / "rootCA-key.pem"
+        self.root_ca_path = self.storage_path / "rootCA.pem"
+        self.root_ca_key_path = self.storage_path / "rootCA-key.pem"
+        self.inter_ca_path = self.storage_path / "intermediateCA.pem"
+        self.inter_ca_key_path = self.storage_path / "intermediateCA-key.pem"
+        
+        # Legacy compatibility for initial requests if needed
+        self.ca_path = self.root_ca_path
+        self.ca_key_path = self.root_ca_key_path
         
         self.storage_path.mkdir(parents=True, exist_ok=True)
-        # Ensure storage directory has correct permissions (700)
         self.storage_path.chmod(0o700)
 
     def _set_secure_permissions(self, path: Path):
-        """Set file permissions to 600 (read/write only for owner)."""
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-    def create_ca(self, force: bool = False, password: Optional[str] = None) -> bool:
-        if self.ca_path.exists() and not force:
+    def create_root_ca(self, force: bool = False, password: Optional[str] = None) -> bool:
+        if self.root_ca_path.exists() and not force:
             return False
             
-        key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-        )
+        key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
         
         subject = issuer = x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "devcert CA"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "devcert development CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "devcert Root CA"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "devcert Master Trust Anchor"),
         ])
         
-        # Use timezone-aware UTC now (best practice)
         now = datetime.datetime.now(datetime.timezone.utc)
         
         cert = x509.CertificateBuilder().subject_name(
@@ -56,52 +55,123 @@ class PKIService:
         ).not_valid_before(
             now
         ).not_valid_after(
-            now + datetime.timedelta(days=3650)
+            now + datetime.timedelta(days=7300) # 20 years for root
         ).add_extension(
             x509.BasicConstraints(ca=True, path_length=None), 
             critical=True,
+        ).add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
         ).sign(key, hashes.SHA256())
         
-        encryption_algorithm = serialization.NoEncryption()
-        if password:
-            encryption_algorithm = serialization.BestAvailableEncryption(password.encode())
+        encryption = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
             
-        with open(self.ca_key_path, "wb") as f:
+        with open(self.root_ca_key_path, "wb") as f:
             f.write(key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=encryption_algorithm,
+                encryption_algorithm=encryption,
             ))
-        
-        self._set_secure_permissions(self.ca_key_path)
+        self._set_secure_permissions(self.root_ca_key_path)
             
-        with open(self.ca_path, "wb") as f:
+        with open(self.root_ca_path, "wb") as f:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
             
         return True
 
-    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes]:
-        if not self.ca_path.exists() or not self.ca_key_path.exists():
-            raise FileNotFoundError("CA not initialized. Run 'init' first.")
+    def create_intermediate_ca(self, root_password: Optional[str] = None, inter_password: Optional[str] = None, force: bool = False) -> bool:
+        if self.inter_ca_path.exists() and not force:
+            return False
             
-        with open(self.ca_key_path, "rb") as f:
-            ca_key_data = f.read()
-            
-        ca_password_bytes = ca_password.encode() if ca_password else None
-        ca_key = serialization.load_pem_private_key(ca_key_data, password=ca_password_bytes)
-            
-        with open(self.ca_path, "rb") as f:
-            ca_cert = x509.load_pem_x509_certificate(f.read())
-            
-        cert_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-        )
+        if not self.root_ca_path.exists():
+            raise FileNotFoundError("Root CA not found. Run create_root_ca first.")
+
+        # Load Root CA
+        with open(self.root_ca_key_path, "rb") as f:
+            root_key = serialization.load_pem_private_key(f.read(), password=root_password.encode() if root_password else None)
+        with open(self.root_ca_path, "rb") as f:
+            root_cert = x509.load_pem_x509_certificate(f.read())
+
+        # Generate Intermediate Key
+        inter_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         
         subject = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "devcert Intermediate CA"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "devcert Signing CA"),
         ])
         
+        now = datetime.datetime.now(datetime.timezone.utc)
+        
+        builder = x509.CertificateBuilder().subject_name(
+            subject
+        ).issuer_name(
+            root_cert.subject
+        ).public_key(
+            inter_key.public_key()
+        ).serial_number(
+            x509.random_serial_number()
+        ).not_valid_before(
+            now
+        ).not_valid_after(
+            now + datetime.timedelta(days=3650) # 10 years for intermediate
+        ).add_extension(
+            x509.BasicConstraints(ca=True, path_length=0), # path_length 0: it can't sign other CAs
+            critical=True,
+        ).add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        
+        inter_cert = builder.sign(root_key, hashes.SHA256())
+        
+        encryption = serialization.BestAvailableEncryption(inter_password.encode()) if inter_password else serialization.NoEncryption()
+
+        with open(self.inter_ca_key_path, "wb") as f:
+            f.write(inter_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=encryption,
+            ))
+        self._set_secure_permissions(self.inter_ca_key_path)
+            
+        with open(self.inter_ca_path, "wb") as f:
+            f.write(inter_cert.public_bytes(serialization.Encoding.PEM))
+            
+        return True
+
+    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes]:
+        # Always use Intermediate CA for signing
+        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
+            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+            
+        with open(self.inter_ca_key_path, "rb") as f:
+            ca_key = serialization.load_pem_private_key(f.read(), password=ca_password.encode() if ca_password else None)
+        with open(self.inter_ca_path, "rb") as f:
+            ca_cert = x509.load_pem_x509_certificate(f.read())
+            
+        cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
         now = datetime.datetime.now(datetime.timezone.utc)
         
         builder = x509.CertificateBuilder().subject_name(
@@ -120,10 +190,7 @@ class PKIService:
         
         if alt_names:
             sans = [x509.DNSName(name) for name in alt_names]
-            builder = builder.add_extension(
-                x509.SubjectAlternativeName(sans),
-                critical=False,
-            )
+            builder = builder.add_extension(x509.SubjectAlternativeName(sans), critical=False)
             
         cert = builder.sign(ca_key, hashes.SHA256())
         
@@ -135,3 +202,11 @@ class PKIService:
         )
         
         return cert_pem, key_pem
+
+    def get_full_chain(self) -> bytes:
+        """Combine Root and Intermediate CA for the trust chain."""
+        with open(self.root_ca_path, "rb") as f:
+            root = f.read()
+        with open(self.inter_ca_path, "rb") as f:
+            inter = f.read()
+        return inter + root

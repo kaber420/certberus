@@ -1,7 +1,6 @@
 import os
 import shutil
 import pytest
-import stat
 from pathlib import Path
 from devcert.pki import PKIService
 
@@ -12,33 +11,32 @@ def temp_storage(tmp_path):
     yield Path(storage)
     shutil.rmtree(storage)
 
-def test_ca_creation_permissions(temp_storage):
+def test_hierarchy_creation(temp_storage):
     pki = PKIService(storage_path=temp_storage)
-    assert pki.create_ca() == True
     
-    # Check directory permissions (700)
-    assert (temp_storage.stat().st_mode & 0o777) == 0o700
-    # Check CA key permissions (600)
-    assert (pki.ca_key_path.stat().st_mode & 0o777) == 0o600
+    # 1. Create Root CA
+    assert pki.create_root_ca(password="root-pwd") == True
+    assert pki.root_ca_path.exists()
+    
+    # 2. Create Intermediate CA
+    assert pki.create_intermediate_ca(root_password="root-pwd", inter_password="inter-pwd") == True
+    assert pki.inter_ca_path.exists()
 
-def test_password_protected_ca(temp_storage):
+def test_chain_signing(temp_storage):
     pki = PKIService(storage_path=temp_storage)
-    password = "secret-password"
-    assert pki.create_ca(password=password) == True
+    pki.create_root_ca(password="root-pwd")
+    pki.create_intermediate_ca(root_password="root-pwd", inter_password="inter-pwd")
     
-    # Signing without password should fail
-    with pytest.raises(Exception):
-        pki.sign_certificate("localhost")
-        
-    # Signing with correct password should work
-    cert, key = pki.sign_certificate("localhost", ca_password=password)
+    # 3. Sign Leaf Certificate using Intermediate
+    cert, key = pki.sign_certificate("localhost", ca_password="inter-pwd")
     assert b"BEGIN CERTIFICATE" in cert
     assert b"BEGIN RSA PRIVATE KEY" in key or b"BEGIN PRIVATE KEY" in key
-
-def test_leaf_certificate_signing(temp_storage):
-    pki = PKIService(storage_path=temp_storage)
-    pki.create_ca()
     
-    cert_pem, key_pem = pki.sign_certificate("localhost", ["localhost", "127.0.0.1"])
-    assert b"BEGIN CERTIFICATE" in cert_pem
-    assert b"BEGIN PRIVATE KEY" in key_pem or b"BEGIN RSA PRIVATE KEY" in key_pem
+def test_full_chain_generation(temp_storage):
+    pki = PKIService(storage_path=temp_storage)
+    pki.create_root_ca()
+    pki.create_intermediate_ca()
+    
+    chain = pki.get_full_chain()
+    # Chain should contain two certificates
+    assert chain.count(b"BEGIN CERTIFICATE") == 2

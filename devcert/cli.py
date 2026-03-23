@@ -10,35 +10,54 @@ app = typer.Typer(help="devcert: A Python-native mkcert alternative.")
 console = Console()
 pki = PKIService()
 
-def get_ca_password() -> Optional[str]:
-    """Look for CA password in environment variable."""
-    return os.getenv("DEVCERT_CA_PASSWORD")
+def get_password(name: str) -> Optional[str]:
+    """Helper to ask for a password securely."""
+    pwd = Prompt.ask(f"Enter password to protect {name} (leave empty for none)", password=True)
+    if not pwd:
+        return None
+    confirm = Prompt.ask(f"Confirm password for {name}", password=True)
+    if pwd != confirm:
+        console.print(f"[red]Passwords for {name} do not match![/red]")
+        return "MISMATCH"
+    return pwd
 
 @app.command()
 def init(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization of CA"),
-    password: bool = typer.Option(False, "--password", "-p", help="Protect Root CA with a password")
+    password: bool = typer.Option(False, "--password", "-p", help="Protect Root and Intermediate with passwords")
 ):
-    """Initialize the devcert Root CA."""
-    pwd = get_ca_password()
-    if password and not pwd:
-        pwd = Prompt.ask("Enter password to protect Root CA", password=True)
-        confirm = Prompt.ask("Confirm password", password=True)
-        if pwd != confirm:
-            console.print("[red]Passwords do not match![/red]")
-            return
-    elif password and pwd:
-        console.print("[dim]Using CA password from DEVCERT_CA_PASSWORD environment variable.[/dim]")
+    """Initialize the devcert Root and Intermediate CAs."""
+    root_pwd = os.getenv("DEVCERT_ROOT_PASSWORD")
+    inter_pwd = os.getenv("DEVCERT_INTER_PASSWORD")
+    
+    if password:
+        if not root_pwd:
+            root_pwd = get_password("Root CA")
+            if root_pwd == "MISMATCH": return
+        if not inter_pwd:
+            inter_pwd = get_password("Intermediate CA")
+            if inter_pwd == "MISMATCH": return
 
     try:
-        success = pki.create_ca(force=force, password=pwd)
-        if success:
-            console.print(f"[green]Root CA initialized at {pki.ca_path}[/green]")
-            console.print(f"[dim]Permissions set to 600 for {pki.ca_key_path.name}[/dim]")
+        # Create Root CA
+        if pki.create_root_ca(force=force, password=root_pwd):
+            console.print(f"[green]Root CA initialized at {pki.root_ca_path}[/green]")
         else:
-            console.print("[yellow]Root CA already exists. Use --force to recreate it.[/yellow]")
+            console.print("[yellow]Root CA already exists.[/yellow]")
+            
+        # Create Intermediate CA (signed by Root)
+        if pki.create_intermediate_ca(root_password=root_pwd, inter_password=inter_pwd, force=force):
+            console.print(f"[green]Intermediate CA initialized at {pki.inter_ca_path}[/green]")
+            # Save chain
+            chain_path = pki.storage_path / "chain.pem"
+            with open(chain_path, "wb") as f:
+                f.write(pki.get_full_chain())
+            console.print(f"[dim]Trust chain saved at {chain_path}[/dim]")
+        else:
+            console.print("[yellow]Intermediate CA already exists.[/yellow]")
+            
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error during initialization: {e}[/red]")
 
 @app.command()
 def create(
@@ -52,26 +71,24 @@ def create(
     elif common_name not in alt_names:
         alt_names.append(common_name)
         
-    pwd = get_ca_password()
-    # If not provided via env var, check if CA key is password protected
-    if not pwd:
-        try:
-            # Try a dry sign to see if it requires a password
-            pki.sign_certificate(common_name, alt_names)
-        except (ValueError, TypeError) as e:
-            if "password" in str(e).lower():
-                pwd = Prompt.ask(f"CA key at {pki.ca_key_path.name} is password protected. Enter password", password=True)
-            else:
-                console.print(f"[red]Error checking CA: {e}[/red]")
-                return
-        except FileNotFoundError:
-            console.print("[red]CA not found. Run 'init' first.[/red]")
-            return
-        except Exception:
-            pass
-    elif pwd:
-        console.print("[dim]Using CA password from DEVCERT_CA_PASSWORD environment variable.[/dim]")
-
+    pwd = os.getenv("DEVCERT_INTER_PASSWORD")
+    
+    # Try signing to see if password is needed
+    try:
+        if not pwd:
+            try:
+                pki.sign_certificate(common_name, alt_names)
+            except (ValueError, TypeError) as e:
+                if "password" in str(e).lower():
+                    pwd = Prompt.ask(f"Intermediate CA key is password protected. Enter password", password=True)
+                else:
+                    raise e
+    except FileNotFoundError:
+        console.print("[red]CA hierarchy not initialized. Run 'init' first.[/red]")
+        return
+    except Exception as e:
+        console.print(f"[red]Error checking CA: {e}[/red]")
+        return
         
     try:
         cert, key = pki.sign_certificate(common_name, alt_names, ca_password=pwd)
@@ -82,17 +99,19 @@ def create(
         cert_name = common_name.replace("*", "star")
         cert_file = out_path / f"{cert_name}.crt"
         key_file = out_path / f"{cert_name}.key"
+        chain_file = out_path / f"{cert_name}-fullchain.crt"
         
-        with open(cert_file, "wb") as f:
-            f.write(cert)
-        with open(key_file, "wb") as f:
-            f.write(key)
-            
-        # Set permissions for the newly created leaf key
+        with open(cert_file, "wb") as f: f.write(cert)
+        with open(key_file, "wb") as f: f.write(key)
+        
+        # Combine leaf and intermediate CA for fullchain
+        with open(pki.inter_ca_path, "rb") as f: inter = f.read()
+        with open(chain_file, "wb") as f: f.write(cert + inter)
+        
         key_file.chmod(0o600)
             
-        console.print(f"[green]Certificate and key created for {common_name} in {output_dir}[/green]")
-        console.print(f"[dim]Key file {key_file.name} secured with 600 permissions.[/dim]")
+        console.print(f"[green]Certificate created for {common_name} in {output_dir}[/green]")
+        console.print(f"[dim]Saved leaf: {cert_file.name}, fullchain: {chain_file.name}[/dim]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
 
@@ -101,23 +120,20 @@ def install():
     """Install the Root CA into the system trust store (requires sudo)."""
     import subprocess
     
-    ca_path = pki.ca_path
+    ca_path = pki.root_ca_path
     if not ca_path.exists():
-        console.print("[red]CA not found. Run 'init' first.[/red]")
+        console.print("[red]Root CA not found. Run 'init' first.[/red]")
         return
         
-    console.print(f"Installing CA from {ca_path}...")
+    console.print(f"Installing Root CA from {ca_path}...")
     
-    # Linux (Ubuntu/Debian) logic
     dest_path = "/usr/local/share/ca-certificates/devcert-rootCA.crt"
     try:
-        # Copy file
         subprocess.run(["sudo", "cp", str(ca_path), dest_path], check=True)
-        # Update trust store
         subprocess.run(["sudo", "update-ca-certificates"], check=True)
         console.print("[green]Root CA installed and trusted by the system.[/green]")
     except subprocess.CalledProcessError as e:
-        console.print(f"[red]Failed to install CA: {e}. Do you have sudo permissions?[/red]")
+        console.print(f"[red]Failed to install CA: {e}[/red]")
 
 if __name__ == "__main__":
     app()
