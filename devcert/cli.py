@@ -10,19 +10,25 @@ app = typer.Typer(help="devcert: A Python-native mkcert alternative.")
 console = Console()
 pki = PKIService()
 
+def get_ca_password() -> Optional[str]:
+    """Look for CA password in environment variable."""
+    return os.getenv("DEVCERT_CA_PASSWORD")
+
 @app.command()
 def init(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization of CA"),
     password: bool = typer.Option(False, "--password", "-p", help="Protect Root CA with a password")
 ):
     """Initialize the devcert Root CA."""
-    pwd = None
-    if password:
+    pwd = get_ca_password()
+    if password and not pwd:
         pwd = Prompt.ask("Enter password to protect Root CA", password=True)
         confirm = Prompt.ask("Confirm password", password=True)
         if pwd != confirm:
             console.print("[red]Passwords do not match![/red]")
             return
+    elif password and pwd:
+        console.print("[dim]Using CA password from DEVCERT_CA_PASSWORD environment variable.[/dim]")
 
     try:
         success = pki.create_ca(force=force, password=pwd)
@@ -46,23 +52,26 @@ def create(
     elif common_name not in alt_names:
         alt_names.append(common_name)
         
-    pwd = None
-    # Check if CA key is password protected by trying to load it without one
-    # Note: A better way would be to catch the specific exception from cryptography
-    try:
-        pki.sign_certificate(common_name, alt_names)
-    except (ValueError, TypeError) as e:
-        if "password" in str(e).lower():
-            pwd = Prompt.ask(f"CA key at {pki.ca_key_path.name} is password protected. Enter password", password=True)
-        else:
-            console.print(f"[red]Error checking CA: {e}[/red]")
+    pwd = get_ca_password()
+    # If not provided via env var, check if CA key is password protected
+    if not pwd:
+        try:
+            # Try a dry sign to see if it requires a password
+            pki.sign_certificate(common_name, alt_names)
+        except (ValueError, TypeError) as e:
+            if "password" in str(e).lower():
+                pwd = Prompt.ask(f"CA key at {pki.ca_key_path.name} is password protected. Enter password", password=True)
+            else:
+                console.print(f"[red]Error checking CA: {e}[/red]")
+                return
+        except FileNotFoundError:
+            console.print("[red]CA not found. Run 'init' first.[/red]")
             return
-    except FileNotFoundError:
-        console.print("[red]CA not found. Run 'init' first.[/red]")
-        return
-    except Exception:
-        # If it worked, we'll run it again below with actual saving
-        pass
+        except Exception:
+            pass
+    elif pwd:
+        console.print("[dim]Using CA password from DEVCERT_CA_PASSWORD environment variable.[/dim]")
+
         
     try:
         cert, key = pki.sign_certificate(common_name, alt_names, ca_password=pwd)

@@ -43,7 +43,18 @@ Install the Root CA into your system's trust store.
 python -m devcert.cli install
 ```
 
+## Automation
+
+For non-interactive environments (CI/CD, setup scripts), you can provide the Root CA password via the `DEVCERT_CA_PASSWORD` environment variable.
+
+```bash
+export DEVCERT_CA_PASSWORD=your_secure_password
+python -m devcert.cli init --password
+python -m devcert.cli create myapp.test
+```
+
 ## License
+
 
 LGPL v3.0 License. See [LICENSE](LICENSE) for details.
 
