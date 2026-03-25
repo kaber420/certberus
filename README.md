@@ -1,20 +1,20 @@
 # CERTberus
 
-`devcert` is a Python-native alternative to `mkcert`. It allows you to generate locally-trusted SSL certificates for development without external binaries or complex OpenSSL commands.
+`certberus` is a Python-native alternative to `mkcert`. It allows you to generate locally-trusted SSL certificates for development without external binaries or complex OpenSSL commands.
 
 ## Features
 
 - **Zero-Binary**: Pure Python implementation with no external dependencies (only standard cryptography libraries).
 - **Secure by Default**: All private keys are generated with restricted permissions (`600`).
-- **XDG Support**: Follows Linux standards for data storage (`~/.local/share/devcert`).
+- **XDG Support**: Follows Linux standards for data storage (`~/.local/share/certberus`).
 - **Password Protection**: Optional encryption for your Root CA key.
 - **FastAPI Integration**: Simple helper to expose the CA for automated provisioning.
 
 ## Installation
 
 ```bash
-git clone https://github.com/kaber420/devcert.git
-cd devcert
+git clone https://github.com/kaber420/certberus.git
+cd certberus
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -26,21 +26,21 @@ pip install -r requirements.txt
 This creates your personal Certificate Authority (only once).
 
 ```bash
-python -m devcert.cli init
+python -m certberus.cli init
 ```
 
 ### 2. Create a Certificate
 Generate a certificate for `localhost` or any local domain.
 
 ```bash
-python -m devcert.cli create localhost
+python -m certberus.cli create localhost
 ```
 
 ### 3. Trust the CA
 Install the Root CA into your system's trust store.
 
 ```bash
-python -m devcert.cli install
+python -m certberus.cli install
 ```
 
 ## Automation
@@ -49,8 +49,8 @@ For non-interactive environments (CI/CD, setup scripts), you can provide the Roo
 
 ```bash
 export DEVCERT_CA_PASSWORD=your_secure_password
-python -m devcert.cli init --password
-python -m devcert.cli create myapp.test
+python -m certberus.cli init --password
+python -m certberus.cli create myapp.test
 ```
 
 ## License

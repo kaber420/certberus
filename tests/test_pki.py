@@ -2,11 +2,11 @@ import os
 import shutil
 import pytest
 from pathlib import Path
-from devcert.pki import PKIService
+from certberus.pki import PKIService
 
 @pytest.fixture
 def temp_storage(tmp_path):
-    storage = tmp_path / "devcert_test"
+    storage = tmp_path / "certberus_test"
     storage.mkdir()
     yield Path(storage)
     shutil.rmtree(storage)

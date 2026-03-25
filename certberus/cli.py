@@ -6,7 +6,7 @@ from .pki import PKIService
 from rich.console import Console
 from rich.prompt import Prompt
 
-app = typer.Typer(help="devcert: A Python-native mkcert alternative.")
+app = typer.Typer(help="certberus: A Python-native mkcert alternative.")
 console = Console()
 pki = PKIService()
 
@@ -26,7 +26,7 @@ def init(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization of CA"),
     password: bool = typer.Option(False, "--password", "-p", help="Protect Root and Intermediate with passwords")
 ):
-    """Initialize the devcert Root and Intermediate CAs."""
+    """Initialize the certberus Root and Intermediate CAs."""
     root_pwd = os.getenv("DEVCERT_ROOT_PASSWORD")
     inter_pwd = os.getenv("DEVCERT_INTER_PASSWORD")
     
@@ -127,7 +127,7 @@ def install():
         
     console.print(f"Installing Root CA from {ca_path}...")
     
-    dest_path = "/usr/local/share/ca-certificates/devcert-rootCA.crt"
+    dest_path = "/usr/local/share/ca-certificates/certberus-rootCA.crt"
     try:
         subprocess.run(["sudo", "cp", str(ca_path), dest_path], check=True)
         subprocess.run(["sudo", "update-ca-certificates"], check=True)

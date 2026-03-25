@@ -12,7 +12,7 @@ class PKIService:
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
             data_home = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-            storage_path = data_home / "devcert"
+            storage_path = data_home / "certberus"
             
         self.storage_path = Path(storage_path)
         self.root_ca_path = self.storage_path / "rootCA.pem"
@@ -38,8 +38,8 @@ class PKIService:
         
         subject = issuer = x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "devcert Root CA"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "devcert Master Trust Anchor"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "certberus Root CA"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "certberus Master Trust Anchor"),
         ])
         
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -107,8 +107,8 @@ class PKIService:
         
         subject = x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "devcert Intermediate CA"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "devcert Signing CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "certberus Intermediate CA"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "certberus Signing CA"),
         ])
         
         now = datetime.datetime.now(datetime.timezone.utc)
