@@ -1,6 +1,7 @@
 import os
 import datetime
 import stat
+import ipaddress
 from pathlib import Path
 from typing import List, Optional, Tuple
 from cryptography import x509
@@ -30,9 +31,9 @@ class PKIService:
     def _set_secure_permissions(self, path: Path):
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
-    def create_root_ca(self, force: bool = False, password: Optional[str] = None) -> bool:
+    def create_root_ca(self, force: bool = False, password: Optional[str] = None) -> Optional[x509.Certificate]:
         if self.root_ca_path.exists() and not force:
-            return False
+            return None
             
         key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
         
@@ -87,11 +88,11 @@ class PKIService:
         with open(self.root_ca_path, "wb") as f:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
             
-        return True
+        return cert
 
-    def create_intermediate_ca(self, root_password: Optional[str] = None, inter_password: Optional[str] = None, force: bool = False) -> bool:
+    def create_intermediate_ca(self, root_password: Optional[str] = None, inter_password: Optional[str] = None, force: bool = False) -> Optional[x509.Certificate]:
         if self.inter_ca_path.exists() and not force:
-            return False
+            return None
             
         if not self.root_ca_path.exists():
             raise FileNotFoundError("Root CA not found. Run create_root_ca first.")
@@ -158,9 +159,9 @@ class PKIService:
         with open(self.inter_ca_path, "wb") as f:
             f.write(inter_cert.public_bytes(serialization.Encoding.PEM))
             
-        return True
+        return inter_cert
 
-    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes]:
+    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes, x509.Certificate]:
         # Always use Intermediate CA for signing
         if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
             raise FileNotFoundError("Intermediate CA not found. Run init first.")
@@ -189,7 +190,13 @@ class PKIService:
         )
         
         if alt_names:
-            sans = [x509.DNSName(name) for name in alt_names]
+            sans = []
+            for name in alt_names:
+                try:
+                    ip_obj = ipaddress.ip_address(name)
+                    sans.append(x509.IPAddress(ip_obj))
+                except ValueError:
+                    sans.append(x509.DNSName(name))
             builder = builder.add_extension(x509.SubjectAlternativeName(sans), critical=False)
             
         cert = builder.sign(ca_key, hashes.SHA256())
@@ -201,7 +208,7 @@ class PKIService:
             encryption_algorithm=serialization.NoEncryption(),
         )
         
-        return cert_pem, key_pem
+        return cert_pem, key_pem, cert
 
     def get_full_chain(self) -> bytes:
         """Combine Root and Intermediate CA for the trust chain."""
@@ -210,3 +217,43 @@ class PKIService:
         with open(self.inter_ca_path, "rb") as f:
             inter = f.read()
         return inter + root
+
+    def generate_crl(self, revoked_certs_meta: List[dict], ca_password: Optional[str] = None, days: int = 7) -> bytes:
+        """Generate a signed CRL from a list of revoked cert metadata dicts.
+        Each dict must have: 'serial_number' (hex str) and 'revoked_at' (datetime).
+        """
+        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
+            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+
+        with open(self.inter_ca_key_path, "rb") as f:
+            ca_key = serialization.load_pem_private_key(
+                f.read(), password=ca_password.encode() if ca_password else None
+            )
+        with open(self.inter_ca_path, "rb") as f:
+            ca_cert = x509.load_pem_x509_certificate(f.read())
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        builder = (
+            x509.CertificateRevocationListBuilder()
+            .issuer_name(ca_cert.subject)
+            .last_update(now)
+            .next_update(now + datetime.timedelta(days=days))
+        )
+
+        for meta in revoked_certs_meta:
+            serial_int = int(meta["serial_number"], 16)
+            revoked_at = meta["revoked_at"]
+            # Ensure timezone-aware
+            if revoked_at.tzinfo is None:
+                revoked_at = revoked_at.replace(tzinfo=datetime.timezone.utc)
+
+            revoked = (
+                x509.RevokedCertificateBuilder()
+                .serial_number(serial_int)
+                .revocation_date(revoked_at)
+                .build()
+            )
+            builder = builder.add_revoked_certificate(revoked)
+
+        crl = builder.sign(ca_key, hashes.SHA256())
+        return crl.public_bytes(serialization.Encoding.PEM)

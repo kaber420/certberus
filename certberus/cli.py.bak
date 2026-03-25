@@ -11,13 +11,13 @@ from .config import load_config, save_config
 import asyncio
 from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
-from .db import session as db_session
+from .db.session import init_db, create_all_tables, AsyncSessionLocal
 from .db.models import Certificate
 
 async def _save_cert_to_db(cert_obj, is_ca=False):
     config = load_config()
-    db_session.init_db(config["database"]["url"])
-    await db_session.create_all_tables()
+    init_db(config["database"]["url"])
+    await create_all_tables()
     
     fingerprint = cert_obj.fingerprint(hashes.SHA256()).hex()
     serial_str = hex(cert_obj.serial_number)[2:]
@@ -36,7 +36,7 @@ async def _save_cert_to_db(cert_obj, is_ca=False):
         is_ca=is_ca
     )
     
-    async with db_session.AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
         session.add(db_cert)
         await session.commit()
 
@@ -233,76 +233,6 @@ def install():
         console.print("[green]Root CA installed and trusted by the system.[/green]")
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Failed to install CA: {e}[/red]")
-
-@app.command()
-def revoke(
-    serial: str = typer.Argument(..., help="Hex serial number of the certificate to revoke"),
-    reason: str = typer.Option("unspecified", "--reason", "-r", help="Revocation reason (keyCompromise, superseded, unspecified…)")
-):
-    """Mark a certificate as revoked in the database."""
-    import datetime
-    from sqlmodel import select
-
-    async def _revoke():
-        config = load_config()
-        db_session.init_db(config["database"]["url"])
-        await db_session.create_all_tables()
-        async with db_session.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Certificate).where(Certificate.serial_number == serial)
-            )
-            cert = result.scalars().first()
-            if not cert:
-                console.print(f"[red]Certificate with serial {serial} not found.[/red]")
-                return
-            if cert.revoked_at:
-                console.print(f"[yellow]Certificate already revoked on {cert.revoked_at}.[/yellow]")
-                return
-            cert.revoked_at = datetime.datetime.now(datetime.timezone.utc)
-            cert.revoke_reason = reason
-            session.add(cert)
-            await session.commit()
-            console.print(f"[green]✅ Certificate '{cert.common_name}' (serial: {serial[:12]}…) revoked.[/green]")
-            console.print(f"[dim]Reason: {reason}. Run 'certberus crl' to regenerate the CRL file.[/dim]")
-
-    asyncio.run(_revoke())
-
-@app.command()
-def crl(
-    output: str = typer.Option("crl.pem", "--output", "-o", help="Output path for the CRL file"),
-    days: int = typer.Option(7, "--days", "-d", help="Days until CRL expires"),
-    ca_password: Optional[str] = typer.Option(None, "--password", "-p", help="Intermediate CA password (if protected)")
-):
-    """Generate and export a signed Certificate Revocation List (CRL)."""
-    from sqlmodel import select
-
-    async def _build_crl():
-        config = load_config()
-        db_session.init_db(config["database"]["url"])
-        await db_session.create_all_tables()
-        async with db_session.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Certificate).where(Certificate.revoked_at != None)  # noqa: E711
-            )
-            revoked = result.scalars().all()
-
-        if not revoked:
-            console.print("[yellow]No revoked certificates found. CRL will be empty.[/yellow]")
-
-        revoked_meta = [
-            {"serial_number": c.serial_number, "revoked_at": c.revoked_at}
-            for c in revoked
-        ]
-
-        pwd = ca_password or os.getenv("CERTBERUS_INTER_PASSWORD")
-        crl_pem = pki.generate_crl(revoked_meta, ca_password=pwd, days=days)
-
-        out_path = Path(output)
-        out_path.write_bytes(crl_pem)
-        console.print(f"[green]✅ CRL generated: {out_path.resolve()} ({len(revoked)} revoked cert(s)).[/green]")
-        console.print(f"[dim]Valid for {days} days. Publish this file so devices can download it via HTTP.[/dim]")
-
-    asyncio.run(_build_crl())
 
 if __name__ == "__main__":
     app()
