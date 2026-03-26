@@ -16,3 +16,5 @@ class Certificate(SQLModel, table=True):
     
     # Track the metadata used to create it
     is_ca: bool = Field(default=False)
+    profile: str = Field(default="router", description="Device profile used (router, iot, server)")
+    status: str = Field(default="active", index=True, description="Status of the certificate (active, revoked)")

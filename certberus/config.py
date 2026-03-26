@@ -27,6 +27,12 @@ def get_default_config():
             "tls_cert": "certberus_api.pem",
             "tls_key": "certberus_api_key.pem"
         },
+        "admin_api": {
+            "enabled": True
+        },
+        "web_console": {
+            "enabled": True
+        },
         "endpoints": {
             "crl_publishing": True,
             "ca_publishing": True,
@@ -36,7 +42,9 @@ def get_default_config():
         "security": {
             "auth_mode": "token",
             "allowed_domains": ["localhost"],
-            "allowed_ips": ["127.0.0.1"]
+            "allowed_ips": ["127.0.0.1"],
+            "admin_token": "",
+            "service_token": ""
         }
     }
 

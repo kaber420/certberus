@@ -14,7 +14,7 @@ from cryptography.x509.oid import NameOID
 from .db import session as db_session
 from .db.models import Certificate
 
-async def _save_cert_to_db(cert_obj, is_ca=False):
+async def _save_cert_to_db(cert_obj, is_ca=False, profile="router"):
     config = load_config()
     db_session.init_db(config["database"]["url"])
     await db_session.create_all_tables()
@@ -33,15 +33,17 @@ async def _save_cert_to_db(cert_obj, is_ca=False):
         issued_at=cert_obj.not_valid_before_utc,
         expires_at=cert_obj.not_valid_after_utc,
         fingerprint=fingerprint,
-        is_ca=is_ca
+        is_ca=is_ca,
+        profile=profile,
+        status="active"
     )
     
     async with db_session.AsyncSessionLocal() as session:
         session.add(db_cert)
         await session.commit()
 
-def save_cert_to_db(cert_obj, is_ca=False):
-    return asyncio.run(_save_cert_to_db(cert_obj, is_ca))
+def save_cert_to_db(cert_obj, is_ca=False, profile="router"):
+    return asyncio.run(_save_cert_to_db(cert_obj, is_ca, profile))
 
 app = typer.Typer(help="certberus: A Python-native mkcert alternative.")
 console = Console()
@@ -97,23 +99,57 @@ def setup():
     config["api"]["enabled"] = api_ans
     
     if api_ans:
+        console.print("\n[bold cyan]Generando tokens de seguridad Dual-Token...[/bold cyan]")
+        import secrets
+        service_token = f"cb_svc_{secrets.token_hex(16)}"
+        admin_token = f"cb_adm_{secrets.token_hex(16)}"
+        config["security"]["service_token"] = service_token
+        config["security"]["admin_token"] = admin_token
+        
+        console.print(f"Service Token (Para equipos): [bold green]{service_token}[/bold green]")
+        console.print(f"Admin Token (Para consola web): [bold green]{admin_token}[/bold green]")
+        
         sign_ans = inquirer.confirm(
             message="¿Deseas exponer el endpoint de Firma de CSRs (Para equipos MikroTik)?",
             default=config["endpoints"]["sign_csr"]
         ).execute()
         config["endpoints"]["sign_csr"] = sign_ans
         
-        if sign_ans:
-            import secrets
-            token = f"cb_sk_{secrets.token_hex(16)}"
-            console.print("\n[bold red]¡Atención![/bold red] Has activado endpoints sensibles.")
-            console.print(f"Token de acceso generado: [bold green]{token}[/bold green]")
-            console.print("[dim]Guarda este token de forma segura, se usará para solicitudes automatizadas.[/dim]")
+        console.print("\n[bold red]¡Atención![/bold red] Has activado endpoints sensibles.")
+        console.print("[dim]Guarda estos tokens. Se han guardado en tu configuración y se usarán para solicitudes automatizadas y administración.[/dim]")
     
     save_config(config)
     console.print("\n[bold green]✅ Configuración generada exitosamente.[/bold green]")
     if api_ans:
         console.print("🚀 Ejecuta [bold cyan]'certberus serve'[/bold cyan] para arrancar la API integrada.")
+
+@app.command()
+def serve(
+    host: str = typer.Option(None, "--host", help="Host to bind the server to"),
+    port: int = typer.Option(None, "--port", help="Port to bind the server to"),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (development)")
+):
+    """Start the Certberus REST API server."""
+    import uvicorn
+    from fastapi import FastAPI
+    from .integrations.fastapi import include_certberus_router, lifespan
+    
+    config = load_config()
+    
+    if not config["api"]["enabled"]:
+        console.print("[yellow]API is disabled in config. Enabling it for this session...[/yellow]")
+    
+    host = host or config["api"]["host"]
+    port = port or config["api"]["port"]
+    
+    app_api = FastAPI(title="Certberus Universal PKI API", lifespan=lifespan)
+    include_certberus_router(app_api)
+    
+    console.print(f"\n[bold green]🛡️ Certberus API Server Starting[/bold green]")
+    console.print(f"URL: [bold cyan]http://{host}:{port}[/bold cyan]")
+    console.print("-" * 50 + "\n")
+    
+    uvicorn.run(app_api, host=host, port=port, reload=reload)
 
 @app.command()
 def init(
@@ -136,7 +172,7 @@ def init(
         # Create Root CA
         root_cert = pki.create_root_ca(force=force, password=root_pwd)
         if root_cert:
-            save_cert_to_db(root_cert, is_ca=True)
+            save_cert_to_db(root_cert, is_ca=True, profile="ca")
             console.print(f"[green]Root CA initialized at {pki.root_ca_path}[/green]")
         else:
             console.print("[yellow]Root CA already exists.[/yellow]")
@@ -144,7 +180,7 @@ def init(
         # Create Intermediate CA (signed by Root)
         inter_cert = pki.create_intermediate_ca(root_password=root_pwd, inter_password=inter_pwd, force=force)
         if inter_cert:
-            save_cert_to_db(inter_cert, is_ca=True)
+            save_cert_to_db(inter_cert, is_ca=True, profile="ca")
             console.print(f"[green]Intermediate CA initialized at {pki.inter_ca_path}[/green]")
             # Save chain
             chain_path = pki.storage_path / "chain.pem"
@@ -161,7 +197,8 @@ def init(
 def create(
     common_name: str = typer.Argument(..., help="Common name for the certificate (e.g. localhost)"),
     alt_names: Optional[List[str]] = typer.Option(None, "--alt", "-a", help="Alternative names (SANs)"),
-    output_dir: str = typer.Option(".", "--output", "-o", help="Directory to save certificates")
+    output_dir: str = typer.Option(".", "--output", "-o", help="Directory to save certificates"),
+    profile: str = typer.Option("router", "--profile", help="Device profile for key usage limits (router, iot, server)")
 ):
     """Create a signed certificate for development."""
     if alt_names is None:
@@ -175,7 +212,7 @@ def create(
     try:
         if not pwd:
             try:
-                pki.sign_certificate(common_name, alt_names)
+                pki.sign_certificate(common_name, alt_names, profile=profile)
             except (ValueError, TypeError) as e:
                 if "password" in str(e).lower():
                     pwd = Prompt.ask(f"Intermediate CA key is password protected. Enter password", password=True)
@@ -189,8 +226,8 @@ def create(
         return
         
     try:
-        cert, key, x509_cert = pki.sign_certificate(common_name, alt_names, ca_password=pwd)
-        save_cert_to_db(x509_cert, is_ca=False)
+        cert, key, x509_cert = pki.sign_certificate(common_name, alt_names, ca_password=pwd, profile=profile)
+        save_cert_to_db(x509_cert, is_ca=False, profile=profile)
         
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)

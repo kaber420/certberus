@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 class PKIService:
@@ -32,6 +33,10 @@ class PKIService:
 
     def _set_secure_permissions(self, path: Path):
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def reload_config(self, new_config: dict):
+        """Update PKIService configuration in memory (hot-reload)."""
+        self.config = new_config
 
     def create_root_ca(self, force: bool = False, password: Optional[str] = None) -> Optional[x509.Certificate]:
         if self.root_ca_path.exists() and not force:
@@ -167,10 +172,10 @@ class PKIService:
                             network = ipaddress.ip_network(ip.strip())
                             subtrees.append(x509.IPAddress(network))
                         else:
+                            # For NameConstraints, we MUST use a network object (e.g. /32)
                             addr = ipaddress.ip_address(ip.strip())
-                            # For NameConstraints, we need a network-like object or a specific mask
-                            #Cryptography expects IPAddress (for single) or IPAddress (with network)
-                            subtrees.append(x509.IPAddress(addr))
+                            network = ipaddress.ip_network(f"{addr}/{32 if addr.version == 4 else 128}")
+                            subtrees.append(x509.IPAddress(network))
                     except ValueError:
                         continue
         
@@ -240,7 +245,7 @@ class PKIService:
                 if not is_allowed(alt):
                     raise ValueError(f"Alternative Name '{alt}' is not allowed by security policy.")
 
-    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes, x509.Certificate]:
+    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None, profile: str = "router") -> Tuple[bytes, bytes, x509.Certificate]:
         # Software Filter: Validate names before signing
         self.validate_names(common_name, alt_names)
         
@@ -257,6 +262,9 @@ class PKIService:
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
         now = datetime.datetime.now(datetime.timezone.utc)
         
+        eku = [x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH] if profile == "iot" else [x509.oid.ExtendedKeyUsageOID.SERVER_AUTH, x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH]
+        valid_days = 90 if profile == "iot" else 825
+        
         builder = x509.CertificateBuilder().subject_name(
             subject
         ).issuer_name(
@@ -268,9 +276,9 @@ class PKIService:
         ).not_valid_before(
             now
         ).not_valid_after(
-            now + datetime.timedelta(days=825)
+            now + datetime.timedelta(days=valid_days)
         ).add_extension(
-            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            x509.ExtendedKeyUsage(eku),
             critical=False
         )
         
@@ -295,7 +303,7 @@ class PKIService:
         
         return cert_pem, key_pem, cert
 
-    def sign_csr(self, csr_pem: str, ca_password: Optional[str] = None) -> Tuple[bytes, x509.Certificate]:
+    def sign_csr(self, csr_pem: str, ca_password: Optional[str] = None, profile: str = "router") -> Tuple[bytes, x509.Certificate]:
         """Signs an existing CSR using the Intermediate CA."""
         if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
             raise FileNotFoundError("Intermediate CA not found. Run init first.")
@@ -319,6 +327,9 @@ class PKIService:
         self.validate_names(cn, sans)
         
         now = datetime.datetime.now(datetime.timezone.utc)
+        eku = [x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH] if profile == "iot" else [x509.oid.ExtendedKeyUsageOID.SERVER_AUTH, x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH]
+        valid_days = 90 if profile == "iot" else 825
+        
         builder = x509.CertificateBuilder().subject_name(
             csr.subject
         ).issuer_name(
@@ -330,9 +341,9 @@ class PKIService:
         ).not_valid_before(
             now
         ).not_valid_after(
-            now + datetime.timedelta(days=825)
+            now + datetime.timedelta(days=valid_days)
         ).add_extension(
-            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            x509.ExtendedKeyUsage(eku),
             critical=False
         )
         
@@ -352,6 +363,27 @@ class PKIService:
         with open(self.inter_ca_path, "rb") as f:
             inter = f.read()
         return inter + root
+
+    def export_p12(self, cert_pem: bytes, key_pem: bytes, friendly_name: str, password: str = "") -> bytes:
+        """Export a certificate and its private key as a PKCS#12 container."""
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        key = serialization.load_pem_private_key(key_pem, password=None)
+        
+        with open(self.inter_ca_path, "rb") as f:
+            inter_cert = x509.load_pem_x509_certificate(f.read())
+        with open(self.root_ca_path, "rb") as f:
+            root_cert = x509.load_pem_x509_certificate(f.read())
+            
+        encryption = serialization.BestAvailableEncryption(password.encode()) if password else serialization.NoEncryption()
+        
+        p12 = pkcs12.serialize_key_and_certificates(
+            friendly_name.encode('utf-8'),
+            key,
+            cert,
+            [inter_cert, root_cert],
+            encryption
+        )
+        return p12
 
     def generate_crl(self, revoked_certs_meta: List[dict], ca_password: Optional[str] = None, days: int = 7) -> bytes:
         """Generate a signed CRL from a list of revoked cert metadata dicts.
