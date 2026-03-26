@@ -16,6 +16,7 @@ htmlcov/
 *.key
 *.p12
 *.pfx
+certs/
 
 # System
 .DS_Store

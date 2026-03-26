@@ -15,7 +15,8 @@ def get_default_config():
     return {
         "core": {
             "storage_path": str(storage),
-            "auto_init": False
+            "auto_init": False,
+            "default_output_dir": "certs"
         },
         "database": {
             "url": f"sqlite+aiosqlite:///{storage}/certs.db"

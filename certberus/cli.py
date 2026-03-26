@@ -213,10 +213,14 @@ def init(
 def create(
     common_name: str = typer.Argument(..., help="Common name for the certificate (e.g. localhost)"),
     alt_names: Optional[List[str]] = typer.Option(None, "--alt", "-a", help="Alternative names (SANs)"),
-    output_dir: str = typer.Option(".", "--output", "-o", help="Directory to save certificates"),
+    output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="Directory to save certificates"),
     profile: str = typer.Option("router", "--profile", help="Device profile for key usage limits (router, iot, server)")
 ):
     """Create a signed certificate for development."""
+    if output_dir is None:
+        config = load_config()
+        output_dir = config["core"].get("default_output_dir", "certs")
+        
     if alt_names is None:
         alt_names = [common_name]
     elif common_name not in alt_names:

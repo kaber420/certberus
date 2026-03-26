@@ -30,7 +30,7 @@ python -m certberus.cli init
 ```
 
 ### 2. Create a Certificate
-Generate a certificate for `localhost` or any local domain.
+Generate a certificate for `localhost` or any local domain. Certificates are saved in the `certs/` folder by default.
 
 ```bash
 python -m certberus.cli create localhost
