@@ -20,3 +20,5 @@ htmlcov/
 # System
 .DS_Store
 Thumbs.db
+certberus.egg-info/PKG-INFO
+certberus.egg-info/SOURCES.txt

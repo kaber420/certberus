@@ -179,11 +179,11 @@ class PKIService:
                     except ValueError:
                         continue
         
-        if subtrees:
-            builder = builder.add_extension(
-                x509.NameConstraints(permitted_subtrees=subtrees, excluded_subtrees=None),
-                critical=True
-            )
+        # if subtrees:
+        #     builder = builder.add_extension(
+        #         x509.NameConstraints(permitted_subtrees=subtrees, excluded_subtrees=None),
+        #         critical=True
+        #     )
         
         inter_cert = builder.sign(root_key, hashes.SHA256())
         

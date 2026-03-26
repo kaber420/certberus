@@ -14,5 +14,8 @@ certberus.egg-info/top_level.txt
 certberus/db/models.py
 certberus/db/session.py
 certberus/integrations/__init__.py
+certberus/integrations/admin_api.py
 certberus/integrations/fastapi.py
+certberus/integrations/service_api.py
 tests/test_pki.py
+tests/test_universal_pki.py
