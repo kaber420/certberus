@@ -34,7 +34,9 @@ def get_default_config():
             "issue_cert": False
         },
         "security": {
-            "auth_mode": "token"
+            "auth_mode": "token",
+            "allowed_domains": ["localhost"],
+            "allowed_ips": ["127.0.0.1"]
         }
     }
 

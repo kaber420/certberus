@@ -10,10 +10,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 class PKIService:
-    def __init__(self, storage_path: Optional[Path] = None):
+    def __init__(self, storage_path: Optional[Path] = None, config: Optional[dict] = None):
+        from .config import load_config
+        self.config = config or load_config()
+        
         if storage_path is None:
-            data_home = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-            storage_path = data_home / "certberus"
+            storage_path = Path(self.config["core"]["storage_path"])
             
         self.storage_path = Path(storage_path)
         self.root_ca_path = self.storage_path / "rootCA.pem"
@@ -144,6 +146,40 @@ class PKIService:
             critical=True,
         )
         
+        # Name Constraints: The "Double Filter" (Criptographic restriction)
+        # Allows restricting the CA to only sign specific domains/IPs
+        security_cfg = self.config.get("security", {})
+        permitted_domains = security_cfg.get("allowed_domains", [])
+        permitted_ips = security_cfg.get("allowed_ips", [])
+        
+        subtrees = []
+        if permitted_domains:
+            for d in permitted_domains:
+                if d.strip():
+                    subtrees.append(x509.DNSName(d.strip()))
+        
+        if permitted_ips:
+            for ip in permitted_ips:
+                if ip.strip():
+                    try:
+                        # Handle both single IPs and networks
+                        if "/" in ip:
+                            network = ipaddress.ip_network(ip.strip())
+                            subtrees.append(x509.IPAddress(network))
+                        else:
+                            addr = ipaddress.ip_address(ip.strip())
+                            # For NameConstraints, we need a network-like object or a specific mask
+                            #Cryptography expects IPAddress (for single) or IPAddress (with network)
+                            subtrees.append(x509.IPAddress(addr))
+                    except ValueError:
+                        continue
+        
+        if subtrees:
+            builder = builder.add_extension(
+                x509.NameConstraints(permitted_subtrees=subtrees, excluded_subtrees=None),
+                critical=True
+            )
+        
         inter_cert = builder.sign(root_key, hashes.SHA256())
         
         encryption = serialization.BestAvailableEncryption(inter_password.encode()) if inter_password else serialization.NoEncryption()
@@ -161,7 +197,53 @@ class PKIService:
             
         return inter_cert
 
+    def validate_names(self, common_name: str, alt_names: Optional[List[str]] = None):
+        """Validates that common_name and alt_names are within allowed domains/IPs."""
+        security_cfg = self.config.get("security", {})
+        allowed_domains = security_cfg.get("allowed_domains", [])
+        allowed_ips = security_cfg.get("allowed_ips", [])
+        
+        # If no restrictions are set, allow all (for dev/testing)
+        if not allowed_domains and not allowed_ips:
+            return
+            
+        def is_allowed(name: str):
+            # Check if it's an IP
+            try:
+                ip_obj = ipaddress.ip_address(name)
+                for allowed_ip in allowed_ips:
+                    try:
+                        if "/" in allowed_ip:
+                            if ip_obj in ipaddress.ip_network(allowed_ip):
+                                return True
+                        elif ip_obj == ipaddress.ip_address(allowed_ip):
+                            return True
+                    except ValueError:
+                        continue
+                return False
+            except ValueError:
+                # Check if it's a domain
+                for allowed_domain in allowed_domains:
+                    if allowed_domain.startswith("*."):
+                        suffix = allowed_domain[1:]
+                        if name.endswith(suffix) or name == allowed_domain[2:]:
+                            return True
+                    elif name == allowed_domain:
+                        return True
+                return False
+
+        if not is_allowed(common_name):
+            raise ValueError(f"Common Name '{common_name}' is not allowed by security policy.")
+            
+        if alt_names:
+            for alt in alt_names:
+                if not is_allowed(alt):
+                    raise ValueError(f"Alternative Name '{alt}' is not allowed by security policy.")
+
     def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None) -> Tuple[bytes, bytes, x509.Certificate]:
+        # Software Filter: Validate names before signing
+        self.validate_names(common_name, alt_names)
+        
         # Always use Intermediate CA for signing
         if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
             raise FileNotFoundError("Intermediate CA not found. Run init first.")
@@ -187,6 +269,9 @@ class PKIService:
             now
         ).not_valid_after(
             now + datetime.timedelta(days=825)
+        ).add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False
         )
         
         if alt_names:
@@ -209,6 +294,56 @@ class PKIService:
         )
         
         return cert_pem, key_pem, cert
+
+    def sign_csr(self, csr_pem: str, ca_password: Optional[str] = None) -> Tuple[bytes, x509.Certificate]:
+        """Signs an existing CSR using the Intermediate CA."""
+        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
+            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+            
+        with open(self.inter_ca_key_path, "rb") as f:
+            ca_key = serialization.load_pem_private_key(f.read(), password=ca_password.encode() if ca_password else None)
+        with open(self.inter_ca_path, "rb") as f:
+            ca_cert = x509.load_pem_x509_certificate(f.read())
+            
+        csr = x509.load_pem_x509_csr(csr_pem.encode())
+        
+        # Validate names from CSR
+        cn = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        sans = []
+        try:
+            ext = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+            sans = ext.value.get_values_for_type(x509.DNSName) + ext.value.get_values_for_type(x509.IPAddress)
+        except x509.ExtensionNotFound:
+            pass
+            
+        self.validate_names(cn, sans)
+        
+        now = datetime.datetime.now(datetime.timezone.utc)
+        builder = x509.CertificateBuilder().subject_name(
+            csr.subject
+        ).issuer_name(
+            ca_cert.subject
+        ).public_key(
+            csr.public_key()
+        ).serial_number(
+            x509.random_serial_number()
+        ).not_valid_before(
+            now
+        ).not_valid_after(
+            now + datetime.timedelta(days=825)
+        ).add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False
+        )
+        
+        # Copy extensions from CSR if needed (SAN is already handled by our builder if we wanted to be strict)
+        # But for MikroTik, we'll carry over what's in the CSR if it's safe
+        for ext in csr.extensions:
+            if isinstance(ext.value, x509.SubjectAlternativeName):
+                builder = builder.add_extension(ext.value, critical=ext.critical)
+                
+        cert = builder.sign(ca_key, hashes.SHA256())
+        return cert.public_bytes(serialization.Encoding.PEM), cert
 
     def get_full_chain(self) -> bytes:
         """Combine Root and Intermediate CA for the trust chain."""
