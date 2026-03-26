@@ -37,6 +37,7 @@ class IssueRequest(BaseModel):
     common_name: str
     alt_names: Optional[List[str]] = None
     ca_password: Optional[str] = None
+    authority: Optional[str] = None
     profile: str = "router"
     format: str = "pem"
     p12_password: str = ""
@@ -75,10 +76,11 @@ async def issue_cert(request: IssueRequest):
             request.common_name, 
             request.alt_names, 
             request.ca_password,
-            profile=request.profile
+            profile=request.profile,
+            authority_name=request.authority
         )
         
-        save_cert_to_db(cert_obj, is_ca=False, profile=request.profile)
+        save_cert_to_db(cert_obj, is_ca=False, profile=request.profile, authority_name=request.authority)
 
         if request.format.lower() == "p12":
             p12_bytes = pki.export_p12(cert_pem, key_pem, request.common_name, request.p12_password)
@@ -104,6 +106,7 @@ async def issue_cert(request: IssueRequest):
 class SignRequest(BaseModel):
     csr_pem: str
     ca_password: Optional[str] = None
+    authority: Optional[str] = None
     profile: str = "router"
     
 @router.post("/sign", dependencies=[Depends(get_service_token)])
@@ -118,10 +121,11 @@ async def sign_csr(request: SignRequest):
         cert_pem, cert_obj = pki.sign_csr(
             request.csr_pem, 
             ca_password=request.ca_password,
-            profile=request.profile
+            profile=request.profile,
+            authority_name=request.authority
         )
         
-        save_cert_to_db(cert_obj, is_ca=False, profile=request.profile)
+        save_cert_to_db(cert_obj, is_ca=False, profile=request.profile, authority_name=request.authority)
 
         return {
             "certificate": cert_pem.decode(),

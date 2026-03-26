@@ -30,3 +30,6 @@ test = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0"]
 
 [project.scripts]
 certberus = "certberus.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["certberus*"]

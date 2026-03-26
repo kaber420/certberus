@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 from .db import session as db_session
 from .db.models import Certificate
+from sqlmodel import select
 
 async def _save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_name: Optional[str] = "default"):
     config = load_config()
@@ -34,8 +35,8 @@ async def _save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_na
         name = authority_name or "default"
         result = await session.execute(select(Authority).where(Authority.name == name))
         auth = result.scalars().first()
-        if not auth and name == "default":
-            auth = Authority(name="default")
+        if not auth and (name == "default" or is_ca):
+            auth = Authority(name=name)
             session.add(auth)
             await session.commit()
             await session.refresh(auth)
@@ -62,6 +63,9 @@ def save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_name: Opt
     return asyncio.run(_save_cert_to_db(cert_obj, is_ca, profile, authority_name))
 
 app = typer.Typer(help="certberus: A Python-native mkcert alternative.")
+ca_app = typer.Typer(help="Manage Certificate Authorities (Root & Intermediates)")
+app.add_typer(ca_app, name="ca")
+
 console = Console()
 pki = PKIService()
 
@@ -214,7 +218,8 @@ def create(
     common_name: str = typer.Argument(..., help="Common name for the certificate (e.g. localhost)"),
     alt_names: Optional[List[str]] = typer.Option(None, "--alt", "-a", help="Alternative names (SANs)"),
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="Directory to save certificates"),
-    profile: str = typer.Option("router", "--profile", help="Device profile for key usage limits (router, iot, server)")
+    profile: str = typer.Option("router", "--profile", help="Device profile for key usage limits (router, iot, server)"),
+    authority: Optional[str] = typer.Option(None, "--ca", help="Name of the Intermediate CA to use (e.g. iot, cameras)")
 ):
     """Create a signed certificate for development."""
     if output_dir is None:
@@ -232,22 +237,22 @@ def create(
     try:
         if not pwd:
             try:
-                pki.sign_certificate(common_name, alt_names, profile=profile)
+                pki.sign_certificate(common_name, alt_names, profile=profile, authority_name=authority)
             except (ValueError, TypeError) as e:
                 if "password" in str(e).lower():
-                    pwd = Prompt.ask(f"Intermediate CA key is password protected. Enter password", password=True)
+                    pwd = Prompt.ask(f"Intermediate CA '{authority or 'default'}' key is password protected. Enter password", password=True)
                 else:
                     raise e
     except FileNotFoundError:
-        console.print("[red]CA hierarchy not initialized. Run 'init' first.[/red]")
+        console.print(f"[red]CA hierarchy '{authority or 'default'}' not found. Run 'ca create' first.[/red]")
         return
     except Exception as e:
         console.print(f"[red]Error checking CA: {e}[/red]")
         return
         
     try:
-        cert, key, x509_cert = pki.sign_certificate(common_name, alt_names, ca_password=pwd, profile=profile)
-        save_cert_to_db(x509_cert, is_ca=False, profile=profile, authority_name="default")
+        cert, key, x509_cert = pki.sign_certificate(common_name, alt_names, ca_password=pwd, profile=profile, authority_name=authority)
+        save_cert_to_db(x509_cert, is_ca=False, profile=profile, authority_name=authority)
         
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)
@@ -360,6 +365,56 @@ def crl(
         console.print(f"[dim]Valid for {days} days. Publish this file so devices can download it via HTTP.[/dim]")
 
     asyncio.run(_build_crl())
+
+@ca_app.command("create")
+def ca_create(
+    name: str = typer.Argument(..., help="Short name for the intermediate CA (e.g. 'iot', 'cameras')"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-initialization of this CA"),
+    password: bool = typer.Option(False, "--password", "-p", help="Protect the CA key with a password")
+):
+    """Create a new named intermediate CA signed by the Root CA."""
+    root_pwd = os.getenv("DEVCERT_ROOT_PASSWORD")
+    inter_pwd = os.getenv("DEVCERT_INTER_PASSWORD")
+    
+    if password:
+        if not root_pwd:
+            root_pwd = Prompt.ask("Enter Root CA password (needed to sign)", password=True)
+        if not inter_pwd:
+            inter_pwd = get_password(f"Intermediate CA '{name}'")
+            if inter_pwd == "MISMATCH": return
+
+    try:
+        inter_cert = pki.create_intermediate_ca(name=name, root_password=root_pwd, inter_password=inter_pwd, force=force)
+        if inter_cert:
+            save_cert_to_db(inter_cert, is_ca=True, profile="ca", authority_name=name)
+            console.print(f"[green]Intermediate CA '{name}' initialized successfully.[/green]")
+        else:
+            console.print(f"[yellow]Intermediate CA '{name}' already exists.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error creating CA '{name}': {e}[/red]")
+
+@ca_app.command("list")
+def ca_list():
+    """List all registered Certificate Authorities."""
+    from sqlmodel import select
+    from .db.models import Authority
+    
+    async def _list():
+        config = load_config()
+        db_session.init_db(config["database"]["url"])
+        async with db_session.AsyncSessionLocal() as session:
+            result = await session.execute(select(Authority))
+            auths = result.scalars().all()
+            
+            if not auths:
+                console.print("[yellow]No authorities found in database.[/yellow]")
+                return
+                
+            console.print("\n[bold cyan]Registered Certificate Authorities:[/bold cyan]")
+            for a in auths:
+                console.print(f"- [bold]{a.name}[/bold]")
+
+    asyncio.run(_list())
 
 if __name__ == "__main__":
     app()
