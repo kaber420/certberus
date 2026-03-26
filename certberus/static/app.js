@@ -8,7 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
         activeView: 'dashboard',
         token: localStorage.getItem('certberus_token') || '',
         certificates: [],
-        stats: { total_active: 0, total_revoked: 0, total: 0 }
+        cas: [],
+        stats: { total_active: 0, total_revoked: 0, total: 0, by_authority: {} }
     };
 
     // UI Elements
@@ -94,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
             await renderDashboard();
         } else if (state.activeView === 'certificates') {
             await renderCertificates();
+        } else if (state.activeView === 'hierarchy') {
+            await renderHierarchy();
         } else if (state.activeView === 'config') {
             await renderConfig();
         }
@@ -142,6 +145,27 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                      </div>
                 </div>
+                
+                <h2 style="margin-top: 2rem; margin-bottom: 1.5rem;">Distribución por Autoridad (CA)</h2>
+                <div class="ca-stats-container">
+                    ${Object.entries(stats.by_authority || {}).map(([authName, authStats]) => `
+                        <div class="status-card" style="background: rgba(255,255,255,0.03); padding: 1.5rem; border-radius: 16px; border: 1px solid var(--glass-border); margin-top: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h4><i class="fas fa-sitemap" style="color: var(--accent-primary); margin-right: 8px;"></i>${authName} CA</h4>
+                                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px;">Certificados emitidos bajo esta autoridad</p>
+                                </div>
+                                <div style="text-align: right;">
+                                    <span style="font-weight: 600; font-size: 1.2rem;">${authStats.total}</span> total
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
+                                        <span style="color: var(--success);">${authStats.active} activos</span> &bull; 
+                                        <span style="color: var(--danger);">${authStats.revoked} rev.</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('') || '<div style="color: var(--text-secondary);">No hay datos de autoridades disponibles.</div>'}
+                </div>
             </div>
         `;
     }
@@ -152,11 +176,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!certs) return;
         
         state.certificates = certs;
+        
+        const cas = await apiRequest('/cas') || [];
+        state.cas = cas;
+        const caMap = {};
+        cas.forEach(c => caMap[c.id] = c.name);
 
         const tableRows = certs.map(cert => `
             <tr>
                 <td style="font-weight: 500;">${cert.common_name}</td>
                 <td style="font-family: monospace; color: var(--accent-primary);">${cert.serial_number.substring(0, 12)}...</td>
+                <td><span class="badge" style="background: rgba(255,255,255,0.1);">${caMap[cert.authority_id] || 'default'}</span></td>
                 <td>${new Date(cert.issued_at).toLocaleDateString()}</td>
                 <td><span class="status-badge ${cert.revoked_at ? 'revoked' : 'active'}">${cert.revoked_at ? 'Revocado' : 'Activo'}</span></td>
                 <td>
@@ -172,15 +202,49 @@ document.addEventListener('DOMContentLoaded', () => {
                         <tr>
                             <th>Nombre Común (CN)</th>
                             <th>Nº Serie</th>
+                            <th>Emisor (CA)</th>
                             <th>Fecha Emisión</th>
                             <th>Estado</th>
                             <th>Acciones</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${tableRows.length ? tableRows : '<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No hay certificados registrados.</td></tr>'}
+                        ${tableRows.length ? tableRows : '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No hay certificados registrados.</td></tr>'}
                     </tbody>
                 </table>
+            </div>
+        `;
+    }
+
+    async function renderHierarchy() {
+        viewTitle.innerText = 'Jerarquía CA';
+        const cas = await apiRequest('/cas');
+        if (!cas) return;
+        state.cas = cas;
+
+        let cards = cas.map(ca => `
+            <div class="stat-card" style="display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; position: relative; border: 1px solid var(--glass-border);">
+                <div style="display: flex; align-items: center; gap: 15px; width: 100%;">
+                    <div class="stat-icon purple"><i class="fas fa-sitemap"></i></div>
+                    <div style="flex-grow: 1;">
+                        <h3 style="margin-bottom: 5px; font-size: 1.2rem;">${ca.name}</h3>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem;">Intermediate CA</div>
+                    </div>
+                </div>
+                <div style="width: 100%; border-top: 1px solid var(--glass-border); padding-top: 1rem; font-size: 0.9rem;">
+                    <div><strong style="color: var(--text-secondary);">ID:</strong> <span style="font-family: monospace;">${ca.id.substring(0,8)}...</span></div>
+                    <div style="margin-top: 5px;"><strong style="color: var(--text-secondary);">Estado:</strong> ${ca.active ? '<span style="color: var(--success);"><i class="fas fa-check-circle"></i> Activa</span>' : '<span style="color: var(--danger);"><i class="fas fa-ban"></i> Inactiva</span>'}</div>
+                </div>
+            </div>
+        `).join('');
+
+        contentArea.innerHTML = `
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 2rem;">
+                <button class="btn-primary" onclick="window.openCreateCAModal()"><i class="fas fa-plus"></i> Nueva Intermedia</button>
+            </div>
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+                ${cards}
+                ${cas.length === 0 ? '<div style="color: var(--text-secondary); grid-column: 1/-1;">No hay CAs adicionales.</div>' : ''}
             </div>
         `;
     }
@@ -294,6 +358,15 @@ document.addEventListener('DOMContentLoaded', () => {
         revokeModal.style.display = 'block';
     };
 
+    const createCaModal = document.getElementById('create-ca-modal');
+    window.openCreateCAModal = () => {
+        document.getElementById('ca-name-input').value = '';
+        document.getElementById('ca-validity-input').value = '3650';
+        document.getElementById('ca-domains-input').value = '';
+        document.getElementById('ca-ips-input').value = '';
+        createCaModal.style.display = 'block';
+    };
+
     function setupEventListeners() {
         loginSubmit.onclick = async () => {
             const token = tokenInput.value.trim();
@@ -349,11 +422,54 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
+        const cancelCreateCa = document.getElementById('cancel-create-ca');
+        const confirmCreateCa = document.getElementById('confirm-create-ca');
+        if (cancelCreateCa) cancelCreateCa.onclick = () => createCaModal.style.display = 'none';
+        
+        if (confirmCreateCa) {
+            confirmCreateCa.onclick = async () => {
+                const name = document.getElementById('ca-name-input').value.trim();
+                const validity_days = parseInt(document.getElementById('ca-validity-input').value) || 3650;
+                const domainsTxt = document.getElementById('ca-domains-input').value;
+                const ipsTxt = document.getElementById('ca-ips-input').value;
+
+                if (!name) return alert('El slug de la CA es requerido');
+
+                const permitted_domains = domainsTxt.split('\n').map(d=>d.trim()).filter(d=>d);
+                const permitted_ips = ipsTxt.split('\n').map(ip=>ip.trim()).filter(ip=>ip);
+
+                const body = {
+                    name,
+                    valid_days: validity_days,
+                    permitted_domains: permitted_domains.length ? permitted_domains : null,
+                    permitted_ips: permitted_ips.length ? permitted_ips : null
+                };
+
+                const origText = confirmCreateCa.innerText;
+                confirmCreateCa.innerText = 'Generando...';
+                confirmCreateCa.disabled = true;
+
+                const res = await apiRequest('/cas/intermediate', {
+                    method: 'POST',
+                    body: JSON.stringify(body)
+                });
+
+                confirmCreateCa.innerText = origText;
+                confirmCreateCa.disabled = false;
+
+                if (res) {
+                    createCaModal.style.display = 'none';
+                    if (state.activeView === 'hierarchy') loadCurrentView();
+                } else {
+                    alert('Error al crear la CA. Revisa los Name Constraints o la conexión.');
+                }
+            };
+        }
+
         // Close modal when clicking outside
         window.onclick = (event) => {
-            if (event.target == revokeModal) {
-                revokeModal.style.display = 'none';
-            }
+            if (event.target == revokeModal) revokeModal.style.display = 'none';
+            if (event.target == createCaModal) createCaModal.style.display = 'none';
         };
     }
 

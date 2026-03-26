@@ -23,6 +23,7 @@ class PKIService:
         self.root_ca_key_path = self.storage_path / "rootCA-key.pem"
         self.inter_ca_path = self.storage_path / "intermediateCA.pem"
         self.inter_ca_key_path = self.storage_path / "intermediateCA-key.pem"
+        self.intermediates_path = self.storage_path / "intermediates"
         
         # Legacy compatibility for initial requests if needed
         self.ca_path = self.root_ca_path
@@ -30,6 +31,15 @@ class PKIService:
         
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.storage_path.chmod(0o700)
+        self.intermediates_path.mkdir(parents=True, exist_ok=True)
+        self.intermediates_path.chmod(0o700)
+
+    def get_authority_paths(self, name: Optional[str]) -> Tuple[Path, Path]:
+        slug = name if name and name != "default" else "default"
+        cert_path = self.intermediates_path / f"{slug}.pem"
+        if slug == "default" and not cert_path.exists() and self.inter_ca_path.exists():
+            return self.inter_ca_path, self.inter_ca_key_path
+        return cert_path, self.intermediates_path / f"{slug}-key.pem"
 
     def _set_secure_permissions(self, path: Path):
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
@@ -97,8 +107,18 @@ class PKIService:
             
         return cert
 
-    def create_intermediate_ca(self, root_password: Optional[str] = None, inter_password: Optional[str] = None, force: bool = False) -> Optional[x509.Certificate]:
-        if self.inter_ca_path.exists() and not force:
+    def create_intermediate_ca(
+        self,
+        name: str = "default",
+        root_password: Optional[str] = None,
+        inter_password: Optional[str] = None,
+        force: bool = False,
+        permitted_domains: Optional[List[str]] = None,
+        permitted_ips: Optional[List[str]] = None,
+        valid_days: int = 3650,
+    ) -> Optional[x509.Certificate]:
+        cert_path, key_path = self.get_authority_paths(name)
+        if cert_path.exists() and not force:
             return None
             
         if not self.root_ca_path.exists():
@@ -132,7 +152,7 @@ class PKIService:
         ).not_valid_before(
             now
         ).not_valid_after(
-            now + datetime.timedelta(days=3650) # 10 years for intermediate
+            now + datetime.timedelta(days=valid_days)
         ).add_extension(
             x509.BasicConstraints(ca=True, path_length=0), # path_length 0: it can't sign other CAs
             critical=True,
@@ -153,15 +173,21 @@ class PKIService:
         
         # Name Constraints: The "Double Filter" (Criptographic restriction)
         # Allows restricting the CA to only sign specific domains/IPs
-        security_cfg = self.config.get("security", {})
-        permitted_domains = security_cfg.get("allowed_domains", [])
-        permitted_ips = security_cfg.get("allowed_ips", [])
+        if permitted_domains is None:
+            security_cfg = self.config.get("security", {})
+            permitted_domains = security_cfg.get("allowed_domains", [])
+        if permitted_ips is None:
+            security_cfg = self.config.get("security", {})
+            permitted_ips = security_cfg.get("allowed_ips", [])
         
         subtrees = []
         if permitted_domains:
             for d in permitted_domains:
                 if d.strip():
-                    subtrees.append(x509.DNSName(d.strip()))
+                    try:
+                        subtrees.append(x509.DNSName(d.strip()))
+                    except (ValueError, TypeError):
+                        continue
         
         if permitted_ips:
             for ip in permitted_ips:
@@ -189,15 +215,15 @@ class PKIService:
         
         encryption = serialization.BestAvailableEncryption(inter_password.encode()) if inter_password else serialization.NoEncryption()
 
-        with open(self.inter_ca_key_path, "wb") as f:
+        with open(key_path, "wb") as f:
             f.write(inter_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.TraditionalOpenSSL,
                 encryption_algorithm=encryption,
             ))
-        self._set_secure_permissions(self.inter_ca_key_path)
+        self._set_secure_permissions(key_path)
             
-        with open(self.inter_ca_path, "wb") as f:
+        with open(cert_path, "wb") as f:
             f.write(inter_cert.public_bytes(serialization.Encoding.PEM))
             
         return inter_cert
@@ -245,17 +271,17 @@ class PKIService:
                 if not is_allowed(alt):
                     raise ValueError(f"Alternative Name '{alt}' is not allowed by security policy.")
 
-    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None, profile: str = "router") -> Tuple[bytes, bytes, x509.Certificate]:
+    def sign_certificate(self, common_name: str, alt_names: Optional[List[str]] = None, ca_password: Optional[str] = None, profile: str = "router", authority_name: Optional[str] = None) -> Tuple[bytes, bytes, x509.Certificate]:
         # Software Filter: Validate names before signing
         self.validate_names(common_name, alt_names)
         
-        # Always use Intermediate CA for signing
-        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
-            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+        ca_cert_path, ca_key_path = self.get_authority_paths(authority_name)
+        if not ca_cert_path.exists() or not ca_key_path.exists():
+            raise FileNotFoundError(f"Intermediate CA '{authority_name or 'default'}' not found.")
             
-        with open(self.inter_ca_key_path, "rb") as f:
+        with open(ca_key_path, "rb") as f:
             ca_key = serialization.load_pem_private_key(f.read(), password=ca_password.encode() if ca_password else None)
-        with open(self.inter_ca_path, "rb") as f:
+        with open(ca_cert_path, "rb") as f:
             ca_cert = x509.load_pem_x509_certificate(f.read())
             
         cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -303,14 +329,15 @@ class PKIService:
         
         return cert_pem, key_pem, cert
 
-    def sign_csr(self, csr_pem: str, ca_password: Optional[str] = None, profile: str = "router") -> Tuple[bytes, x509.Certificate]:
+    def sign_csr(self, csr_pem: str, ca_password: Optional[str] = None, profile: str = "router", authority_name: Optional[str] = None) -> Tuple[bytes, x509.Certificate]:
         """Signs an existing CSR using the Intermediate CA."""
-        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
-            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+        ca_cert_path, ca_key_path = self.get_authority_paths(authority_name)
+        if not ca_cert_path.exists() or not ca_key_path.exists():
+            raise FileNotFoundError(f"Intermediate CA '{authority_name or 'default'}' not found.")
             
-        with open(self.inter_ca_key_path, "rb") as f:
+        with open(ca_key_path, "rb") as f:
             ca_key = serialization.load_pem_private_key(f.read(), password=ca_password.encode() if ca_password else None)
-        with open(self.inter_ca_path, "rb") as f:
+        with open(ca_cert_path, "rb") as f:
             ca_cert = x509.load_pem_x509_certificate(f.read())
             
         csr = x509.load_pem_x509_csr(csr_pem.encode())
@@ -356,20 +383,22 @@ class PKIService:
         cert = builder.sign(ca_key, hashes.SHA256())
         return cert.public_bytes(serialization.Encoding.PEM), cert
 
-    def get_full_chain(self) -> bytes:
+    def get_full_chain(self, authority_name: Optional[str] = None) -> bytes:
         """Combine Root and Intermediate CA for the trust chain."""
+        ca_cert_path, _ = self.get_authority_paths(authority_name)
         with open(self.root_ca_path, "rb") as f:
             root = f.read()
-        with open(self.inter_ca_path, "rb") as f:
+        with open(ca_cert_path, "rb") as f:
             inter = f.read()
         return inter + root
 
-    def export_p12(self, cert_pem: bytes, key_pem: bytes, friendly_name: str, password: str = "") -> bytes:
+    def export_p12(self, cert_pem: bytes, key_pem: bytes, friendly_name: str, password: str = "", authority_name: Optional[str] = None) -> bytes:
         """Export a certificate and its private key as a PKCS#12 container."""
         cert = x509.load_pem_x509_certificate(cert_pem)
         key = serialization.load_pem_private_key(key_pem, password=None)
         
-        with open(self.inter_ca_path, "rb") as f:
+        ca_cert_path, _ = self.get_authority_paths(authority_name)
+        with open(ca_cert_path, "rb") as f:
             inter_cert = x509.load_pem_x509_certificate(f.read())
         with open(self.root_ca_path, "rb") as f:
             root_cert = x509.load_pem_x509_certificate(f.read())
@@ -385,18 +414,19 @@ class PKIService:
         )
         return p12
 
-    def generate_crl(self, revoked_certs_meta: List[dict], ca_password: Optional[str] = None, days: int = 7) -> bytes:
+    def generate_crl(self, revoked_certs_meta: List[dict], ca_password: Optional[str] = None, days: int = 7, authority_name: Optional[str] = None) -> bytes:
         """Generate a signed CRL from a list of revoked cert metadata dicts.
         Each dict must have: 'serial_number' (hex str) and 'revoked_at' (datetime).
         """
-        if not self.inter_ca_path.exists() or not self.inter_ca_key_path.exists():
-            raise FileNotFoundError("Intermediate CA not found. Run init first.")
+        ca_cert_path, ca_key_path = self.get_authority_paths(authority_name)
+        if not ca_cert_path.exists() or not ca_key_path.exists():
+            raise FileNotFoundError(f"Intermediate CA '{authority_name or 'default'}' not found.")
 
-        with open(self.inter_ca_key_path, "rb") as f:
+        with open(ca_key_path, "rb") as f:
             ca_key = serialization.load_pem_private_key(
                 f.read(), password=ca_password.encode() if ca_password else None
             )
-        with open(self.inter_ca_path, "rb") as f:
+        with open(ca_cert_path, "rb") as f:
             ca_cert = x509.load_pem_x509_certificate(f.read())
 
         now = datetime.datetime.now(datetime.timezone.utc)
