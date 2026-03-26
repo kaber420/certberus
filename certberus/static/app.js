@@ -193,15 +193,22 @@ document.addEventListener('DOMContentLoaded', () => {
         contentArea.innerHTML = `
             <div class="config-grid" style="display: grid; gap: 1.5rem;">
                 <div class="config-card" style="background: var(--glass-bg); padding: 2rem; border-radius: 24px; border: 1px solid var(--glass-border);">
-                    <h3>Políticas de Seguridad</h3>
-                    <div style="margin-top: 1.5rem;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 1rem; align-items: center;">
-                            <span>Nodos permitidos (Domains)</span>
-                            <code style="color: var(--accent-primary); background: rgba(0,210,255,0.05); padding: 4px 8px; border-radius: 6px;">${config.security.allowed_domains.join(', ')}</code>
+                    <h3>Políticas de Seguridad (Software Filter)</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.5rem;">Restringe qué dominios e IPs puede firmar Certberus mediante reglas de software.</p>
+                    <div style="margin-top: 1.5rem; display: grid; gap: 20px;">
+                        <div>
+                            <label style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 8px; display: block;">Dominios Permitidos (uno por línea)</label>
+                            <textarea id="allowed-domains-input" class="config-input" rows="3">${config.security.allowed_domains.join('\n')}</textarea>
                         </div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 1rem; align-items: center;">
-                            <span>Modo de Autenticación</span>
-                            <span class="badge">${config.security.auth_mode.toUpperCase()}</span>
+                        <div>
+                            <label style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 8px; display: block;">IPs / Redes Permitidas (uno por línea)</label>
+                            <textarea id="allowed-ips-input" class="config-input" rows="3">${config.security.allowed_ips.join('\n')}</textarea>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div style="font-size: 0.85rem; color: var(--warning);">
+                                <i class="fas fa-info-circle"></i> Las "Name Constraints" criptográficas requieren reiniciar la CA.
+                            </div>
+                            <button onclick="saveSecurityPolicy()" class="btn-primary btn-small">Guardar Cambios</button>
                         </div>
                     </div>
                 </div>
@@ -254,6 +261,30 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             alert('Error al actualizar la configuración. Verifica tu conexión o token.');
             renderConfig(); // Reset UI
+        }
+    };
+
+    window.saveSecurityPolicy = async () => {
+        const domains = document.getElementById('allowed-domains-input').value.split('\n').map(d => d.trim()).filter(d => d);
+        const ips = document.getElementById('allowed-ips-input').value.split('\n').map(ip => ip.trim()).filter(ip => ip);
+
+        const patch = {
+            security: {
+                allowed_domains: domains,
+                allowed_ips: ips
+            }
+        };
+
+        const res = await apiRequest('/config', {
+            method: 'PATCH',
+            body: JSON.stringify(patch)
+        });
+
+        if (res) {
+            alert('Política de seguridad actualizada correctamente.');
+            renderConfig();
+        } else {
+            alert('Error al guardar la política de seguridad.');
         }
     };
 

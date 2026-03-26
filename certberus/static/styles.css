@@ -417,6 +417,31 @@ input:checked + .slider:before {
     background-color: var(--accent-primary);
 }
 
+.config-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--glass-border);
+    color: var(--text-primary);
+    padding: 10px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    margin-top: 10px;
+    resize: none;
+}
+
+.config-input:focus {
+    border-color: var(--accent-primary);
+    outline: none;
+}
+
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+
 /* Modal Styling */
 .modal {
     display: none;
