@@ -14,7 +14,7 @@ from cryptography.x509.oid import NameOID
 from .db import session as db_session
 from .db.models import Certificate
 
-async def _save_cert_to_db(cert_obj, is_ca=False, profile="router"):
+async def _save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_name: Optional[str] = "default"):
     config = load_config()
     db_session.init_db(config["database"]["url"])
     await db_session.create_all_tables()
@@ -27,23 +27,39 @@ async def _save_cert_to_db(cert_obj, is_ca=False, profile="router"):
     except tuple() + (IndexError,):
         cn = "Unknown"
         
-    db_cert = Certificate(
-        serial_number=serial_str,
-        common_name=cn,
-        issued_at=cert_obj.not_valid_before_utc,
-        expires_at=cert_obj.not_valid_after_utc,
-        fingerprint=fingerprint,
-        is_ca=is_ca,
-        profile=profile,
-        status="active"
-    )
-    
+    auth_id = None
     async with db_session.AsyncSessionLocal() as session:
+        from .db.models import Authority, Certificate
+        # Find or create authority record for legacy/cli certs
+        name = authority_name or "default"
+        result = await session.execute(select(Authority).where(Authority.name == name))
+        auth = result.scalars().first()
+        if not auth and name == "default":
+            auth = Authority(name="default")
+            session.add(auth)
+            await session.commit()
+            await session.refresh(auth)
+        
+        if auth:
+            auth_id = auth.id
+
+        db_cert = Certificate(
+            serial_number=serial_str,
+            common_name=cn,
+            issued_at=cert_obj.not_valid_before_utc,
+            expires_at=cert_obj.not_valid_after_utc,
+            fingerprint=fingerprint,
+            is_ca=is_ca,
+            authority_id=auth_id,
+            profile=profile,
+            status="active"
+        )
+        
         session.add(db_cert)
         await session.commit()
 
-def save_cert_to_db(cert_obj, is_ca=False, profile="router"):
-    return asyncio.run(_save_cert_to_db(cert_obj, is_ca, profile))
+def save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_name: Optional[str] = "default"):
+    return asyncio.run(_save_cert_to_db(cert_obj, is_ca, profile, authority_name))
 
 app = typer.Typer(help="certberus: A Python-native mkcert alternative.")
 console = Console()
@@ -180,7 +196,7 @@ def init(
         # Create Intermediate CA (signed by Root)
         inter_cert = pki.create_intermediate_ca(root_password=root_pwd, inter_password=inter_pwd, force=force)
         if inter_cert:
-            save_cert_to_db(inter_cert, is_ca=True, profile="ca")
+            save_cert_to_db(inter_cert, is_ca=True, profile="ca", authority_name="default")
             console.print(f"[green]Intermediate CA initialized at {pki.inter_ca_path}[/green]")
             # Save chain
             chain_path = pki.storage_path / "chain.pem"
@@ -227,7 +243,7 @@ def create(
         
     try:
         cert, key, x509_cert = pki.sign_certificate(common_name, alt_names, ca_password=pwd, profile=profile)
-        save_cert_to_db(x509_cert, is_ca=False, profile=profile)
+        save_cert_to_db(x509_cert, is_ca=False, profile=profile, authority_name="default")
         
         out_path = Path(output_dir)
         out_path.mkdir(parents=True, exist_ok=True)

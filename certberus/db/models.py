@@ -4,15 +4,15 @@ import uuid
 from sqlmodel import Field, SQLModel
 
 class Authority(SQLModel, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     name: str = Field(index=True, unique=True, description="Name or slug of the CA (e.g., CA-IoT)")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     active: bool = Field(default=True, description="Whether this CA is currently active")
 
 class Certificate(SQLModel, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     serial_number: str = Field(index=True, unique=True, description="Hex representation of x509 serial")
-    authority_id: Optional[uuid.UUID] = Field(default=None, foreign_key="authority.id", description="ID of the issuing CA")
+    authority_id: Optional[str] = Field(default=None, foreign_key="authority.id", description="ID of the issuing CA")
     common_name: str
     issued_at: datetime
     expires_at: datetime

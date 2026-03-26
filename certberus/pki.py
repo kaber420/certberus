@@ -185,7 +185,13 @@ class PKIService:
             for d in permitted_domains:
                 if d.strip():
                     try:
-                        subtrees.append(x509.DNSName(d.strip()))
+                        domain = d.strip()
+                        if domain.startswith("*."):
+                            domain = domain[2:]
+                        elif domain.startswith("*"):
+                            domain = domain[1:]
+                            
+                        subtrees.append(x509.DNSName(domain))
                     except (ValueError, TypeError):
                         continue
         

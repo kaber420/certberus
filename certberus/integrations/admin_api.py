@@ -145,7 +145,9 @@ async def create_intermediate_ca(request: CreateCARequest):
                 
         return {"status": "success", "message": f"Intermediate CA '{request.name}' created"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PKI Error: {str(e)}")
 
 @router.get("/stats", dependencies=[Depends(get_admin_token)])
 async def get_stats():
