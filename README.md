@@ -1,6 +1,6 @@
 # Red de Confianza Soberana (RCS)
 ## Infraestructura de Certificación Descentralizada y Comunitaria
-Certia (yuxiCA) is a decentralized infrastructure designed to democratize trust on the web. By shifting the "source of truth" from centralized corporate entities to a transparent, community-governed federation, we ensure that digital identities are resilient, auditable, and accessible to everyone.
+YuxiCA (yuxiCA) is a decentralized infrastructure designed to democratize trust on the web. By shifting the "source of truth" from centralized corporate entities to a transparent, community-governed federation, we ensure that digital identities are resilient, auditable, and accessible to everyone.
 
 ## 🚀 Objectives
 - **Decentralized Trust:** Replace the single-point-of-failure Root CA model with a blockchain-based consensus.
@@ -14,7 +14,7 @@ Certia (yuxiCA) is a decentralized infrastructure designed to democratize trust 
 - **Standard X.509 Interoperability:** Full compatibility with modern browsers and operating systems.
 
 ## 🏗️ Architecture Overview: The Sovereign Hierarchy
-Certia decentralizes power through a four-level hierarchy designed for maximum resilience:
+YuxiCA decentralizes power through a four-level hierarchy designed for maximum resilience:
 
 1.  **Level 1: Community Root CA (The "International Treaty"):** The offline trust anchor. It only signs certified Intermediate CAs.
 2.  **Level 2: Intermediate CAs (The "Governments/Organizations"):** Entities approved by the DAO to manage specific name-spaces (e.g., `.mesh`, `.comunidad`).
@@ -23,6 +23,6 @@ Certia decentralizes power through a four-level hierarchy designed for maximum r
 
 ## 🤝 Key Features
 - **Decentralized Trust:** Replace the single-point-of-failure Root CA model with a blockchain-based consensus.
-- **Cross-Signing Compatibility:** Allow dual trust paths (Traditional + Certia) for seamless transition.
+- **Cross-Signing Compatibility:** Allow dual trust paths (Traditional + YuxiCA) for seamless transition.
 - **Transparency:** All certificate lifecycles (issuance, revocation, renewal) are anchored in public or consortium blockchains.
 - **DAO Governance:** Token holders or community members vote on admitting or revoking Intermediate CAs.

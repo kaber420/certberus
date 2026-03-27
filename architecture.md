@@ -1,4 +1,4 @@
-# Technical Architecture: Certia (yuxiCA)
+# Technical Architecture: YuxiCA
 
 ## System Components
 
