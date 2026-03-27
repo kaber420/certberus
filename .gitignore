@@ -23,3 +23,5 @@ certs/
 Thumbs.db
 certberus.egg-info/PKG-INFO
 certberus.egg-info/SOURCES.txt
+test_audit.db
+*.db

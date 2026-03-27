@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import hashes
 from ..pki import PKIService
 from ..config import load_config
 from ..cli import save_cert_to_db
+from ..db.audit import log_event
 
 router = APIRouter(tags=["Certberus Service API"])
 
@@ -90,6 +91,16 @@ async def issue_cert(request: IssueRequest):
                 "fingerprint": cert_obj.fingerprint(hashes.SHA256()).hex()
             }
 
+        await log_event(
+            method="POST",
+            endpoint="/issue",
+            status_code=200,
+            token_type="service",
+            request_payload=request.model_dump(),
+            response_summary="Certificate issued successfully",
+            serial_number=hex(cert_obj.serial_number)[2:]
+        )
+
         return {
             "certificate": cert_pem.decode(),
             "key": key_pem.decode(),
@@ -99,8 +110,14 @@ async def issue_cert(request: IssueRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        await log_event(
+            method="POST",
+            endpoint="/issue",
+            status_code=500,
+            token_type="service",
+            request_payload=request.model_dump(),
+            response_summary=f"Error: {str(e)}"
+        )
         raise HTTPException(status_code=500, detail=f"Issuance failed: {e}")
 
 class SignRequest(BaseModel):
@@ -127,6 +144,16 @@ async def sign_csr(request: SignRequest):
         
         save_cert_to_db(cert_obj, is_ca=False, profile=request.profile, authority_name=request.authority)
 
+        await log_event(
+            method="POST",
+            endpoint="/sign",
+            status_code=200,
+            token_type="service",
+            request_payload={"csr_pem": request.csr_pem, "profile": request.profile, "authority": request.authority},
+            response_summary="CSR signed successfully",
+            serial_number=hex(cert_obj.serial_number)[2:]
+        )
+
         return {
             "certificate": cert_pem.decode(),
             "serial_number": hex(cert_obj.serial_number)[2:],
@@ -135,4 +162,12 @@ async def sign_csr(request: SignRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        await log_event(
+            method="POST",
+            endpoint="/sign",
+            status_code=500,
+            token_type="service",
+            request_payload={"csr_pem": request.csr_pem},
+            response_summary=f"Error: {str(e)}"
+        )
         raise HTTPException(status_code=500, detail=f"Signing failed: {e}")

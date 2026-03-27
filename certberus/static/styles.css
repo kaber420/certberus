@@ -520,3 +520,28 @@ input:checked + .slider:before {
     font-weight: 600;
     cursor: pointer;
 }
+
+/* Audit Log Specific Styles */
+.method-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    font-family: monospace;
+}
+.method-post { background: rgba(0, 210, 255, 0.1); color: var(--accent-primary); }
+.method-patch { background: rgba(157, 80, 187, 0.1); color: var(--accent-secondary); }
+.method-get { background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); }
+
+.status-text { font-weight: 600; }
+.status-success { color: var(--success); }
+.status-error { color: var(--danger); }
+
+.log-details-cell {
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}

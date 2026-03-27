@@ -8,8 +8,9 @@ from typing import List, Optional, Any
 from ..pki import PKIService
 from ..config import load_config, save_config
 from ..db import session as db_session
-from ..db.models import Certificate, Authority
-from sqlmodel import select
+from ..db.models import Certificate, Authority, AuditLog
+from ..db.audit import log_event
+from sqlmodel import select, desc
 
 router = APIRouter(prefix="/admin", tags=["Certberus Admin API"])
 
@@ -81,7 +82,15 @@ async def revoke_certificate(serial: str, request: RevokeRequest):
         cert.revoke_reason = request.reason
         cert.status = "revoked"
         session.add(cert)
-        await session.commit()
+        await log_event(
+            method="POST",
+            endpoint=f"/admin/certificates/{serial}/revoke",
+            status_code=200,
+            token_type="admin",
+            request_payload=request.model_dump(),
+            response_summary=f"Certificate {serial} revoked",
+            serial_number=serial
+        )
         return {"status": "success", "message": f"Certificate {serial} revoked"}
 
 @router.get("/config", dependencies=[Depends(get_admin_token)])
@@ -103,8 +112,14 @@ async def update_config(patch: ConfigPatch):
     if patch.endpoints:
         config["endpoints"].update(patch.endpoints)
         
-    save_config(config)
-    pki.reload_config(config)
+    await log_event(
+        method="PATCH",
+        endpoint="/admin/config",
+        status_code=200,
+        token_type="admin",
+        request_payload=patch.model_dump(),
+        response_summary="Configuration updated and reloaded"
+    )
     
     return {"status": "success", "message": "Configuration updated and reloaded", "config": pki.config}
 
@@ -143,6 +158,15 @@ async def create_intermediate_ca(request: CreateCARequest):
                 session.add(auth)
                 await session.commit()
                 
+        await log_event(
+            method="POST",
+            endpoint="/admin/cas/intermediate",
+            status_code=200,
+            token_type="admin",
+            request_payload=request.model_dump(),
+            response_summary=f"Intermediate CA '{request.name}' created"
+        )
+                
         return {"status": "success", "message": f"Intermediate CA '{request.name}' created"}
     except Exception as e:
         import traceback
@@ -180,6 +204,14 @@ async def get_stats():
             "total": total_certs,
             "by_authority": stats_by_authority
         }
+
+@router.get("/logs", dependencies=[Depends(get_admin_token)])
+async def list_logs(limit: int = 100, skip: int = 0):
+    async with db_session.AsyncSessionLocal() as session:
+        query = select(AuditLog).order_by(desc(AuditLog.timestamp)).offset(skip).limit(limit)
+        result = await session.execute(query)
+        logs = result.scalars().all()
+        return logs
 
 @router.get("/health")
 async def health_check():

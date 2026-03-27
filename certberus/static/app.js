@@ -99,6 +99,8 @@ document.addEventListener('DOMContentLoaded', () => {
             await renderHierarchy();
         } else if (state.activeView === 'config') {
             await renderConfig();
+        } else if (state.activeView === 'logs') {
+            await renderLogs();
         }
     }
 
@@ -298,6 +300,57 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
     }
+    async function renderLogs() {
+        viewTitle.innerText = 'Audit Logs';
+        const logs = await apiRequest('/logs');
+        if (!logs) return;
+
+        const logRows = logs.map(log => {
+            const methodClass = `method-${log.method.toLowerCase()}`;
+            const statusClass = log.status_code < 400 ? 'status-success' : 'status-error';
+            const date = new Date(log.timestamp).toLocaleString();
+            
+            return `
+                <tr>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">${date}</td>
+                    <td><span class="method-badge ${methodClass}">${log.method}</span></td>
+                    <td style="font-family: monospace; font-size: 0.9rem;">${log.endpoint}</td>
+                    <td class="status-text ${statusClass}">${log.status_code}</td>
+                    <td><span class="badge" style="font-size: 0.75rem;">${log.token_type}</span></td>
+                    <td class="log-details-cell" title="${log.response_summary || ''}">${log.response_summary || '---'}</td>
+                    <td style="font-family: monospace; font-size: 0.8rem;">${log.serial_number || '---'}</td>
+                </tr>
+            `;
+        }).join('');
+
+        contentArea.innerHTML = `
+            <div class="data-table-container">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                    <p style="color: var(--text-secondary); font-size: 0.9rem;">Registros inmutables de actividad del PKI.</p>
+                    <div style="font-size: 0.8rem; color: var(--accent-primary);">
+                        <i class="fas fa-shield-check"></i> Registro de Auditoría Activo
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha/Hora</th>
+                            <th>Método</th>
+                            <th>Endpoint</th>
+                            <th>Status</th>
+                            <th>Token</th>
+                            <th>Resumen</th>
+                            <th>Serial</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logRows.length ? logRows : '<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No hay registros de auditoría aún.</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
 
     window.toggleEndpoint = async (endpoint, enabled) => {
         const loadingBadge = document.createElement('span');
