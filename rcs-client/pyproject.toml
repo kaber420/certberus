@@ -1,0 +1,13 @@
+[project]
+name = "rcs-client"
+version = "0.1.0"
+description = "Sovereign Digital Trust Client for RCS"
+dependencies = [
+    "typer[all]",
+    "cryptography",
+    "web3",
+    "rich"
+]
+
+[project.scripts]
+rcs-client = "rcs_client.main:app"

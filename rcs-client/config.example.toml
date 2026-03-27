@@ -1,0 +1,29 @@
+[core]
+storage_path = "/home/proyectos/yuxiCA/rcs-client/data"
+auto_init = false
+default_output_dir = "certs"
+
+[database]
+url = "sqlite+aiosqlite:////home/proyectos/yuxiCA/rcs-client/data/certs.db"
+
+[api]
+enabled = true
+host = "127.0.0.1"
+port = 8080
+
+[security]
+auth_mode = "token"
+admin_token = "secret_token123"
+service_token = "secret_token321"
+allowed_domains = ["localhost", ".local", ".mesh"]
+allowed_ips = ["127.0.0.1", "10.0.0.0/8"]
+
+[federation]
+enabled = true
+status = "federated"
+
+[endpoints]
+crl_publishing = true
+ca_publishing = true
+sign_csr = true
+issue_cert = true

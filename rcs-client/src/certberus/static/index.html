@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Certberus PKI Console</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container" id="main-app" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <i class="fas fa-shield-halved"></i>
+                <span>Certberus</span>
+            </div>
+            <nav>
+                <ul>
+                    <li class="active" data-view="dashboard">
+                        <i class="fas fa-chart-pie"></i>
+                        <span>Dashboard</span>
+                    </li>
+                    <li data-view="certificates">
+                        <i class="fas fa-certificate"></i>
+                        <span>Certificados</span>
+                    </li>
+                    <li data-view="hierarchy">
+                        <i class="fas fa-sitemap"></i>
+                        <span>Jerarquía CA</span>
+                    </li>
+                    <li data-view="federation" class="rcs-feature">
+                        <i class="fas fa-globe"></i>
+                        <span>Federación RCS</span>
+                    </li>
+                    <li data-view="config">
+                        <i class="fas fa-cog"></i>
+                        <span>Configuración</span>
+                    </li>
+                    <li data-view="logs">
+                        <i class="fas fa-list-check"></i>
+                        <span>Audit Logs</span>
+                    </li>
+                </ul>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="dot online"></span>
+                    <span>API Online</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header>
+                <h1 id="view-title">Dashboard</h1>
+                <div class="user-actions">
+                    <button id="logout-btn" class="btn-icon" title="Cerrar Sesión"><i class="fas fa-sign-out-alt"></i></button>
+                    <button id="refresh-btn" class="btn-icon"><i class="fas fa-sync-alt"></i></button>
+                    <div class="auth-token-status">
+                        <span class="badge">Admin Session</span>
+                    </div>
+                </div>
+            </header>
+
+            <div id="content-area" class="content-fade">
+                <!-- Content will be injected here by app.js -->
+            </div>
+        </main>
+    </div>
+
+    <!-- Login Screen -->
+    <div id="login-screen" class="login-container">
+        <div class="login-box">
+            <div class="login-logo">
+                <i class="fas fa-shield-halved"></i>
+                <h1>Certberus</h1>
+            </div>
+            <p>Introduce tu Admin Token para acceder a la consola.</p>
+            <div class="form-group">
+                <input type="password" id="admin-token-input" placeholder="cb_adm_xxxxxxx">
+            </div>
+            <button id="login-submit" class="btn-primary">Acceder</button>
+            <div id="login-error" class="login-error-msg"></div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="revoke-modal" class="modal">
+        <div class="modal-content">
+            <h2>Revocar Certificado</h2>
+            <p>¿Estás seguro de que deseas revocar este certificado? Esta acción no se puede deshacer.</p>
+            <div class="form-group">
+                <label for="revoke-reason">Razón de revocación:</label>
+                <select id="revoke-reason">
+                    <option value="unspecified">No especificado</option>
+                    <option value="keyCompromise">Compromiso de clave</option>
+                    <option value="superseded">Reemplazado</option>
+                    <option value="cessationOfOperation">Cese de operación</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button id="cancel-revoke" class="btn-secondary">Cancelar</button>
+                <button id="confirm-revoke" class="btn-danger">Revocar ahora</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="create-ca-modal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <h2>Nueva CA Intermedia</h2>
+            <p>Define una nueva CA subordinada para emisión de certificados.</p>
+            <div class="form-group" style="margin-top: 15px;">
+                <label for="ca-name-input">Nombre corto (Slug):</label>
+                <input type="text" id="ca-name-input" placeholder="ej. CA-IoT, CA-Servidores" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: white;">
+            </div>
+            <div class="form-group">
+                <label for="ca-validity-input">Validez (Días):</label>
+                <input type="number" id="ca-validity-input" value="3650" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: white;">
+            </div>
+            <div class="form-group">
+                <label for="ca-domains-input">Name Constraints: Dominios (Opcional)</label>
+                <textarea id="ca-domains-input" placeholder="*.local.lan" rows="2" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: white;"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="ca-ips-input">Name Constraints: IPs (Opcional)</label>
+                <textarea id="ca-ips-input" placeholder="10.0.0.0/8" rows="2" style="width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); color: white;"></textarea>
+            </div>
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button id="cancel-create-ca" class="btn-secondary">Cancelar</button>
+                <button id="confirm-create-ca" class="btn-primary">Generar CA</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
