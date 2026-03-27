@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from pathlib import Path
 import toml
 
@@ -56,10 +57,13 @@ def get_default_config():
             "allowed_ips": ["127.0.0.1"],
             "admin_token": "",
             "service_token": ""
+        },
+        "plugins": {
+            # "yuxi_blockchain": {"enabled": False, ...}
         }
     }
 
-def load_config(path: Path = None):
+def load_config(path: Optional[Path] = None) -> dict:
     if path is None:
         path = get_default_config_path()
     
@@ -72,10 +76,11 @@ def load_config(path: Path = None):
     # Merge with default config to ensure all keys exist
     config = get_default_config()
     for section, values in user_config.items():
-        if section in config and isinstance(values, dict):
-            config[section].update(values)
+        s_key = str(section)
+        if s_key in config and isinstance(values, dict):
+            config[s_key].update(values)
         else:
-            config[section] = values
+            config[s_key] = values
             
     return config
 

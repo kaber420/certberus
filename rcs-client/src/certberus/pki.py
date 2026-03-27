@@ -16,11 +16,13 @@ class SecurityPolicyViolation(Exception):
 class PKIService:
     def __init__(self, storage_path: Optional[Path] = None, config: Optional[dict] = None):
         from .config import load_config
+        import logging
         self.config = config or load_config()
+        self.logger = logging.getLogger(__name__)
         
         if storage_path is None:
             storage_path = Path(self.config["core"]["storage_path"])
-            
+        
         self.storage_path = Path(storage_path)
         self.root_ca_path = self.storage_path / "rootCA.pem"
         self.root_ca_key_path = self.storage_path / "rootCA-key.pem"
@@ -36,6 +38,34 @@ class PKIService:
         self.storage_path.chmod(0o700)
         self.intermediates_path.mkdir(parents=True, exist_ok=True)
         self.intermediates_path.chmod(0o700)
+
+        self.plugins = []
+        self._load_plugins()
+
+    def _load_plugins(self):
+        plugin_configs = self.config.get("plugins", {})
+        for name, cfg in plugin_configs.items():
+            if cfg.get("enabled", False):
+                try:
+                    import importlib
+                    module_path = f"certberus.plugins.{name}"
+                    module = importlib.import_module(module_path)
+                    plugin_class = getattr(module, "Plugin")
+                    instance = plugin_class(self, cfg)
+                    self.plugins.append(instance)
+                    instance.on_init()
+                    self.logger.info(f"Loaded plugin: {name}")
+                except Exception as e:
+                    self.logger.error(f"Failed to load plugin {name}: {e}")
+
+    def trigger_hook(self, method_name: str, **kwargs):
+        """Trigger a hook on all enabled plugins."""
+        for plugin in self.plugins:
+            if hasattr(plugin, method_name):
+                try:
+                    getattr(plugin, method_name)(**kwargs)
+                except Exception as e:
+                    self.logger.error(f"Error in plugin {plugin.name()} - {method_name}: {e}")
 
     def get_authority_paths(self, name: Optional[str]) -> Tuple[Path, Path]:
         slug = name if name and name != "default" else "default"
@@ -375,6 +405,9 @@ class PKIService:
         # Validate names before signing
         self.validate_names(common_name, alt_names, ca_cert=ca_cert)
             
+        # Plugin Hook: Pre-sign validation
+        self.trigger_hook("pre_sign", common_name=common_name, alt_names=alt_names, authority_name=authority_name)
+            
         cert_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -435,6 +468,9 @@ class PKIService:
             builder = builder.add_extension(x509.SubjectAlternativeName(sans), critical=False)
             
         cert = builder.sign(ca_key, hashes.SHA256())
+        
+        # Plugin Hook: Post-issuance processing
+        self.trigger_hook("post_issue", cert_obj=cert, cert_pem=cert.public_bytes(serialization.Encoding.PEM))
         
         cert_pem = cert.public_bytes(serialization.Encoding.PEM)
         key_pem = cert_key.private_bytes(
@@ -524,7 +560,14 @@ class PKIService:
             if isinstance(ext.value, x509.SubjectAlternativeName):
                 builder = builder.add_extension(ext.value, critical=ext.critical)
                 
+        # Plugin Hook: Pre-sign validation for CSR
+        self.trigger_hook("pre_sign", common_name=csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value, authority_name=authority_name)
+
         cert = builder.sign(ca_key, hashes.SHA256())
+
+        # Plugin Hook: Post-issuance for CSR
+        self.trigger_hook("post_issue", cert_obj=cert, cert_pem=cert.public_bytes(serialization.Encoding.PEM))
+
         return cert.public_bytes(serialization.Encoding.PEM), cert
 
     def get_full_chain(self, authority_name: Optional[str] = None) -> bytes:
