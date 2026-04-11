@@ -62,7 +62,7 @@ async def _save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_na
 def save_cert_to_db(cert_obj, is_ca=False, profile="router", authority_name: Optional[str] = "default"):
     return asyncio.run(_save_cert_to_db(cert_obj, is_ca, profile, authority_name))
 
-app = typer.Typer(help="certberus: A Python-native mkcert alternative.")
+app = typer.Typer(help="certberus: A Python-native SSL certificate management tool.")
 ca_app = typer.Typer(help="Manage Certificate Authorities (Root & Intermediates)")
 app.add_typer(ca_app, name="ca")
 

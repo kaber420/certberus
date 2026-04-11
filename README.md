@@ -1,6 +1,6 @@
 # CERTberus
 
-`certberus` is a Python-native alternative to `mkcert`. It allows you to generate locally-trusted SSL certificates for development without external binaries or complex OpenSSL commands.
+`certberus` is a Python-native tool for managing locally-trusted SSL certificates. It allows you to generate certificates for development without external binaries or complex OpenSSL commands.
 
 ## Features
 
