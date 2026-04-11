@@ -1,0 +1,18 @@
+# Exclude non-essential directories for pure functionality release
+recursive-exclude scripts *
+recursive-exclude tests *
+recursive-exclude certs *
+recursive-exclude .github *
+recursive-exclude .drafts *
+recursive-exclude .pytest_cache *
+
+# Explicitly exclude specific garbage files
+exclude .gitignore
+exclude requirements.txt
+exclude pyproject.toml.bak
+exclude certberus/cli.py.bak
+
+# Include essential files
+include README.md
+include LICENSE
+include pyproject.toml
